@@ -1,0 +1,43 @@
+
+#pragma once
+#include "medici/time.hpp"
+#include <concepts>
+#include <cstdint>
+#include <expected>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <type_traits>
+
+namespace medici::event_queue {
+using Expected = std::expected<void, std::string>;
+using AsyncExpected = std::expected<bool, std::string>;
+
+using CallableT = std::function<Expected()>;
+using AsyncCallableT = std::function<AsyncExpected()>;
+
+template <typename T>
+concept CallableC = requires(T t) {
+  { t() } -> std::same_as<Expected>;
+};
+
+template <typename T>
+concept AsyncCallableC = requires(T t) {
+  { t() } -> std::same_as<AsyncExpected>;
+};
+
+template <typename T>
+concept EventQueueC = requires(T t) {
+  { t.postAsyncAction(AsyncCallableT{}) } -> std::same_as<Expected>;
+  { t.postAction(CallableT{}) } -> std::same_as<Expected>;
+  {
+    t.postPrecisionTimedAction(TimePoint{}, CallableT{})
+  } -> std::same_as<Expected>;
+  { t.postIdleTimedAction(TimePoint{}, CallableT{}) } -> std::same_as<Expected>;
+  { t.start() } -> std::same_as<Expected>;
+  { t.stop() } -> std::same_as<Expected>;
+  { t.pumpEvents() } -> std::same_as<Expected>;
+  { t.isActive() } -> std::same_as<bool>;
+};
+
+} // namespace medici::event_queue
