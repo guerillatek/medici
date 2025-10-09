@@ -56,17 +56,20 @@ public:
     return _outgoingPayloadHandler(payload, deliveryTime);
   }
 
-  Expected onCloseEndpoint(const std::string &reason = "") {
+  Expected onCloseEndpoint(const std::string &reason,
+                           const IPEndpointConfig &endpointConfig) {
     for (auto timerEntry : _registeredTimers) {
       timerEntry->stop();
     }
     if (!_closeHandler) {
       return {};
     }
-    return _closeHandler(reason);
+    return _closeHandler(reason, endpointConfig);
   }
 
-  Expected onDisconnected(const std::string &reason) {
+  Expected
+  onDisconnected(const std::string &reason,
+                 const medici::sockets::IPEndpointConfig &endpointConfig) {
     for (auto timerEntry : _registeredTimers) {
       timerEntry->stop();
     }
@@ -76,7 +79,7 @@ public:
           std::format("Endpoint name={} DISCONNECTED errno={}",
                       _endpointConfig.name(), reason));
     }
-    return _DisconnectedHandlerT(reason);
+    return _DisconnectedHandlerT(reason, endpointConfig);
   }
 
   Expected registerTimer(const timers::IEndPointTimerPtr &timer) {

@@ -101,7 +101,7 @@ private:
 template <EndpointEventPollMgrC EndpointEventPollMgrT, ClockNowC ClockT,
           std::uint32_t PayloadSize = 1024,
           std::uint32_t MaxProducerQueueSize = 1024 * 64>
-class EventQueue {
+class EventQueue : public IEventQueue {
   using ActiveThreadId = std::optional<std::thread::id>;
   using ThreadSpecificQueueT =
       ThreadSpecificQueue<PayloadSize, MaxProducerQueueSize>;
@@ -124,8 +124,7 @@ public:
       : _externalProducerQueue{maxProducerThreads},
         _endpointEventPollMgr{endpointEventPollMgr}, _clock{clock},
         _maxProducerThreads{maxProducerThreads},
-        _inActivitySleepDuration{inActivitySleepDuration} {
-  }
+        _inActivitySleepDuration{inActivitySleepDuration} {}
 
   ExpectedBuffer getNextActionPayload() {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
@@ -189,7 +188,7 @@ public:
     return {};
   }
 
-  Expected postAsyncAction(AsyncCallableC auto &&action) {
+  template <AsyncCallableC T> Expected postAsyncAction(T &&action) {
     auto asyncCallableWrapper = [action = std::move(action),
                                  this]() mutable -> Expected {
       auto result = action();
@@ -202,7 +201,7 @@ public:
         return {};
       }
       // Action did not complete and needs to attempted again
-      return postAsyncAction(std::move(action));
+      return postAsyncAction<T>(std::move(action));
     };
 
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
@@ -212,11 +211,12 @@ public:
       _localEventQueue.emplace_back(std::move(asyncCallableWrapper));
       return {};
     }
-    return postAction(std::move(asyncCallableWrapper));
+    return postAction<decltype(asyncCallableWrapper)>(
+        std::move(asyncCallableWrapper));
   }
 
-  Expected postPrecisionTimedAction(TimePoint timePoint,
-                                    CallableC auto &&action) {
+  template <CallableC T>
+  Expected postPrecisionTimedAction(TimePoint timePoint, T &&action) {
     if (_clock() > timePoint) {
       return std::unexpected(std::format(
           "Posting timed action for expired time={}, currentTime={}", timePoint,
@@ -228,14 +228,17 @@ public:
           PrioritizedCallable{timePoint, std::move(action)});
       return Expected{};
     }
-    return postAction([timePoint, action = std::move(action), this] mutable {
+
+    auto actionToPost = [timePoint, action = std::move(action), this] mutable {
       _precisionTimedEvents.push(
           PrioritizedCallable{timePoint, std::move(action)});
       return Expected{};
-    });
+    };
+    return postAction<decltype(actionToPost)>(std::move(actionToPost));
   }
 
-  Expected postIdleTimedAction(TimePoint timePoint, CallableC auto &&action) {
+  template <CallableC T>
+  Expected postIdleTimedAction(TimePoint timePoint, T &&action) {
     if (_clock() > timePoint) {
       return std::unexpected(std::format(
           "Cannot post timed action for expired time={}, currentTime={}",
@@ -245,10 +248,11 @@ public:
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
       _idleTimedEvents.push(PrioritizedCallable{timePoint, std::move(action)});
     }
-    return postAction([timePoint, action = std::move(action), this] mutable {
+    auto actionToPost = [timePoint, action = std::move(action), this] mutable {
       _idleTimedEvents.push(PrioritizedCallable{timePoint, std::move(action)});
       return Expected{};
-    });
+    };
+    return postAction<decltype(actionToPost)>(std::move(actionToPost));
   }
 
   Expected start() {
@@ -402,7 +406,27 @@ private:
     return _externalProducerQueue.begin() + targetIndex;
   }
 
-  // FIXME: YO : place members in order of use in poll cycle to have better
+  // Public interface implementation
+
+  Expected postAsyncAction(const AsyncCallableT &action) override {
+    return postAsyncAction<AsyncCallableT>(AsyncCallableT{action});
+  }
+
+  Expected postAction(const CallableT &action) override {
+    return postAction<CallableT>(CallableT{action});
+  }
+
+  Expected postPrecisionTimedAction(TimePoint timePoint,
+                                    const CallableT &action) override {
+    return postPrecisionTimedAction<CallableT>(timePoint, CallableT{action});
+  }
+
+  Expected postIdleTimedAction(TimePoint timePoint,
+                               CallableT &action) override {
+    return postIdleTimedAction<CallableT>(timePoint, CallableT{action});
+  }
+
+  // TODO: Put members in order of use in poll cycle to have better
   // cache locality
   TimedEventQueue _precisionTimedEvents{};
   TimedEventQueue _idleTimedEvents{};

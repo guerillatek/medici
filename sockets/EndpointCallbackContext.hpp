@@ -10,13 +10,11 @@ class EndpointCallbackBaseMembers {
 public:
   EndpointCallbackBaseMembers(CoordinatorT &endPointCoordinator,
                               const IPEndpointConfig &config)
-      : _fd{0}, _config{config}, _endPointCoordinator{endPointCoordinator} {}
+      : _config{config}, _endPointCoordinator{endPointCoordinator} {}
 
-  auto getOSFileDescriptor() const { return _fd; }
   auto getConfig() const { return _config; }
 
 private:
-  int _fd;
   IPEndpointConfig _config;
 
 protected:
@@ -40,44 +38,47 @@ public:
                      DisconnectedHandlerT &disconnectedHandler,
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
-                                    CoordinatorT>{this->_endPointCoordinator,
-                                                  config},
-        _endpoint{std::forward<ArgsT>(args)...,
-                  config,
-                  endpointPollManager,
-                  [this, &incomingPayloadHandler](auto payload, auto tp) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return incomingPayloadHandler(payload, tp);
-                  },
-                  [this, &outgoingPayloadHandler](auto payload, auto tp) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return outgoingPayloadHandler(payload, tp);
-                  },
-                  [this, &closeHandler](const std::string &reason) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return closeHandler(reason);
-                  },
-                  [this, &disconnectedHandler](const auto &reason) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return disconnectedHandler(reason);
-                  },
-                  [this, &onActiveHandler]() {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return onActiveHandler();
-                  }} {}
+                                    CoordinatorT>{endPointCoordinator, config},
+        _endpoint{
+            std::forward<ArgsT>(args)...,
+            config,
+            endpointPollManager,
+            [this, &incomingPayloadHandler](auto payload, auto tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return incomingPayloadHandler(payload, tp);
+            },
+            [this, &outgoingPayloadHandler](auto payload, auto tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return outgoingPayloadHandler(payload, tp);
+            },
+            [this, &closeHandler](const std::string &reason,
+                                  const IPEndpointConfig &endpointConfig) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return closeHandler(reason, endpointConfig);
+            },
+            [this, &disconnectedHandler](
+                const auto &reason, const IPEndpointConfig &endpointConfig) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return disconnectedHandler(reason, endpointConfig);
+            },
+            [this, &onActiveHandler]() {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return onActiveHandler();
+            }} {}
 
+  auto &getEndpoint() const { return _endpoint; }
   auto &getEndpoint() { return _endpoint; }
 
 private:
   EndpointT _endpoint;
 };
 
-template <IsHttpEndpoint EndpointT, typename CoordinatorT>
+template <IsHttpClientEndpoint EndpointT, typename CoordinatorT>
 class CallbackBaseSelect<EndpointT, CoordinatorT>
     : public EndpointCallbackBaseMembers<EndpointT, CoordinatorT> {
 public:
@@ -85,8 +86,8 @@ public:
   CallbackBaseSelect(CoordinatorT &endPointCoordinator,
                      const IPEndpointConfig &config,
                      IIPEndpointPollManager &endpointPollManager,
-                     HttpPayloadHandlerC auto &incomingPayloadHandler,
-                     HttpPayloadHandlerC auto &outgoingPayloadHandler,
+                     HttpClientPayloadHandlerC auto &incomingPayloadHandler,
+                     SocketPayloadHandlerC auto &outgoingPayloadHandler,
                      CloseHandlerT &closeHandler,
                      DisconnectedHandlerT &disconnectedHandler,
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
@@ -97,37 +98,96 @@ public:
             std::forward<ArgsT>(args)...,
             config,
             endpointPollManager,
-            [this, &incomingPayloadHandler](http::HttpFields &&httpFields,
-                                            auto payload, auto tp) {
+            [this, &incomingPayloadHandler](const http::HttpFields &httpFields,
+                                            auto payload, int ec, auto tp) {
               this->_endPointCoordinator.setActiveEndpoint(
-                  this->getOSFileDescriptor());
-              return incomingPayloadHandler(
-                  std::forward<http::HttpFields>(httpFields), payload, tp);
+                  _endpoint.getEndpointUniqueId());
+              return incomingPayloadHandler(httpFields, payload, ec, tp);
             },
-            [this, &outgoingPayloadHandler](http::HttpFields &&httpFields,
-                                            auto payload, auto tp) {
+            [this, &outgoingPayloadHandler](auto payload, auto tp) {
               this->_endPointCoordinator.setActiveEndpoint(
-                  this->getOSFileDescriptor());
-              return outgoingPayloadHandler(
-                  std::forward<http::HttpFields>(httpFields), payload, tp);
+                  _endpoint.getEndpointUniqueId());
+              return outgoingPayloadHandler(payload, tp);
             },
-            [this, &closeHandler](const std::string &reason) {
+            [this, &closeHandler](const std::string &reason,
+                                  const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
-                  this->getOSFileDescriptor());
-              return closeHandler(reason);
+                  _endpoint.getEndpointUniqueId());
+              return closeHandler(reason, endpointConfig);
             },
-            [this, &disconnectedHandler](const auto &reason) {
+            [this, &disconnectedHandler](
+                const auto &reason, const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
-                  this->getOSFileDescriptor());
+                  _endpoint.getEndpointUniqueId());
               return disconnectedHandler(reason);
             },
             [this, &onActiveHandler]() {
               this->_endPointCoordinator.setActiveEndpoint(
-                  this->getOSFileDescriptor());
+                  _endpoint.getEndpointUniqueId());
               return onActiveHandler();
             }} {}
 
   auto &getEndpoint() const { return _endpoint; }
+  auto &getEndpoint() { return _endpoint; }
+
+private:
+  EndpointT _endpoint;
+};
+
+template <IsHttpServerEndpoint EndpointT, typename CoordinatorT>
+class CallbackBaseSelect<EndpointT, CoordinatorT>
+    : public EndpointCallbackBaseMembers<EndpointT, CoordinatorT> {
+public:
+  template <typename... ArgsT>
+  CallbackBaseSelect(CoordinatorT &endPointCoordinator,
+                     const IPEndpointConfig &config,
+                     IIPEndpointPollManager &endpointPollManager,
+                     HttpServerPayloadHandlerC auto &incomingPayloadHandler,
+                     SocketPayloadHandlerC auto &outgoingPayloadHandler,
+                     CloseHandlerT &closeHandler,
+                     DisconnectedHandlerT &disconnectedHandler,
+                     OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
+      : EndpointCallbackBaseMembers<EndpointT,
+                                    CoordinatorT>{endPointCoordinator, config},
+        _endpoint{
+            std::forward<ArgsT>(args)...,
+            config,
+            endpointPollManager,
+            [this, &incomingPayloadHandler](
+                http::HTTPAction action, const std::string &requestURI,
+                const http::HttpFields &httpFields,
+                const HttpServerPayloadT &payload, TimePoint tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return incomingPayloadHandler(action, requestURI, httpFields,
+                                            payload, tp);
+            },
+            [this, &outgoingPayloadHandler](std::string_view payload,
+                                            TimePoint tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return outgoingPayloadHandler(payload, tp);
+            },
+            [this, &closeHandler](const std::string &reason,
+                                  const IPEndpointConfig &endpointConfig) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return closeHandler(reason, endpointConfig);
+            },
+            [this, &disconnectedHandler](
+                const auto &reason, const IPEndpointConfig &endpointConfig) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return disconnectedHandler(reason, endpointConfig);
+            },
+            [this, &onActiveHandler]() {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return onActiveHandler();
+            }} {}
+
+  auto &getEndpoint() const { return _endpoint; }
+  auto &getEndpoint() { return _endpoint; }
 
 private:
   EndpointT _endpoint;
@@ -149,38 +209,41 @@ public:
       : EndpointCallbackBaseMembers<EndpointT,
                                     CoordinatorT>{std::forward<ArgsT>(args)...,
                                                   endPointCoordinator, config},
-        _endpoint{std::forward<ArgsT>(args)...,
-                  config,
-                  endpointPollManager,
-                  [this, &incomingPayloadHandler](auto payload, WSOpCode opCode,
-                                                  auto tp) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return incomingPayloadHandler(payload, opCode, tp);
-                  },
-                  [this, &outgoingPayloadHandler](auto payload, WSOpCode opCode,
-                                                  auto tp) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return outgoingPayloadHandler(payload, opCode, tp);
-                  },
-                  [this, &closeHandler](const std::string &reason) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return closeHandler(reason);
-                  },
-                  [this, &disconnectedHandler](const auto &reason) {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return disconnectedHandler(reason);
-                  },
-                  [this, &onActiveHandler]() {
-                    this->_endPointCoordinator.setActiveEndpoint(
-                        this->getOSFileDescriptor());
-                    return onActiveHandler();
-                  }} {}
+        _endpoint{
+            std::forward<ArgsT>(args)...,
+            config,
+            endpointPollManager,
+            [this, &incomingPayloadHandler](auto payload, WSOpCode opCode,
+                                            auto tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return incomingPayloadHandler(payload, opCode, tp);
+            },
+            [this, &outgoingPayloadHandler](auto payload, WSOpCode opCode,
+                                            auto tp) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return outgoingPayloadHandler(payload, opCode, tp);
+            },
+            [this, &closeHandler](const std::string &reason,
+                                  const IPEndpointConfig &endpointConfig) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return closeHandler(reason, endpointConfig);
+            },
+            [this, &disconnectedHandler](const auto &reason) {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return disconnectedHandler(reason);
+            },
+            [this, &onActiveHandler]() {
+              this->_endPointCoordinator.setActiveEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return onActiveHandler();
+            }} {}
 
   auto &getEndpoint() const { return _endpoint; }
+  auto &getEndpoint() { return _endpoint; }
 
 private:
   EndpointT _endpoint;

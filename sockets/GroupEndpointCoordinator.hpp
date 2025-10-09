@@ -24,6 +24,7 @@ public:
   using EndpointContextLookup = std::unordered_map<int, CallbackContextPtr>;
   using ContextEntry = EndpointContextLookup::iterator;
   using PayloadHandlerT = decltype(getEndpointHandlerType<EndpointT>());
+  using OutgoingHandlerT = decltype(getOutgoingHandlerType<EndpointT>());
 
   GroupEndpointCoordinator(auto &&incomingPayloadHandler,
                            auto &&outgoingPayloadHandler,
@@ -40,14 +41,19 @@ public:
   Expected registerEndpoint(const auto &config,
                             IIPEndpointPollManager &endpointPollManager,
                             int fd) {
-    auto context = std::make_unique<CallbackContextT>(
-        *this, config, endpointPollManager, _incomingPayloadHandler,
-        _outgoingPayloadHandler, _closeHandler, _disconnectedHandlerT,
-        _onActiveHandler, fd);
-    auto [it, inserted] = _contextLookup.emplace(fd, std::move(context));
-    if (!inserted) {
-      return std::unexpected(
-          std::format("Endpoint with fd={} already registered", fd));
+    try {
+      auto context = std::make_unique<CallbackContextT>(
+          *this, config, endpointPollManager, _incomingPayloadHandler,
+          _outgoingPayloadHandler, _closeHandler, _disconnectedHandlerT,
+          _onActiveHandler, fd);
+      auto [it, inserted] = _contextLookup.emplace(fd, std::move(context));
+      if (!inserted) {
+        return std::unexpected(
+            std::format("Endpoint with fd={} already registered", fd));
+      }
+    } catch (const std::exception &ex) {
+      return std::unexpected(std::format(
+          "Failed to create remote endpoint context  error={}", ex.what()));
     }
     return {};
   }
@@ -91,7 +97,7 @@ public:
   }
 
   Expected closeRemoteEndpoints(const std::string &reason) {
-    forEachEndpoint([&reason](auto &context) {
+    forEachEndpoint([&reason](CallbackContextT &context) {
       return context.getEndpoint().closeEndpoint(reason);
     });
     return {};
@@ -99,7 +105,7 @@ public:
 
 private:
   PayloadHandlerT _incomingPayloadHandler;
-  PayloadHandlerT _outgoingPayloadHandler;
+  OutgoingHandlerT _outgoingPayloadHandler;
   CloseHandlerT _closeHandler;
   DisconnectedHandlerT _disconnectedHandlerT;
   OnActiveHandlerT _onActiveHandler;

@@ -10,37 +10,53 @@ template <typename EndpointT, application::AppRunContextC ThreadRunContextT>
 class RemoteEndpointListener {
 public:
   RemoteEndpointListener(ThreadRunContextT &threadRunContext,
-                         const IPEndpointConfig& listenerEndpointConfig,
+                         const auto &listenerEndpointConfig,
                          CloseHandlerT listenerCloseHandler,
                          DisconnectedHandlerT listenerDisconnectHandler,
                          OnActiveHandlerT listenerOnActiveHandler,
                          auto &&remoteIncomingPayloadHandler,
                          auto &&remoteOutgoingPayloadHandler,
-                         CloseHandlerT removeCloseHandler,
+                         CloseHandlerT remoteCloseHandler,
                          DisconnectedHandlerT remoteDisconnectedHandlerT,
                          OnActiveHandlerT remoteOnActiveHandler)
-      : _listenEndpoint{threadRunContext.getSocketFactory()
-                            .createTcpIpListenerEndpoint(
-                                listenerEndpointConfig, listenerCloseHandler,
-                                listenerDisconnectHandler,
-                                listenerOnActiveHandler,
-                                [this, &threadRunContext](
-                                    const auto &remoteConfig, int clientFd) {
-                                  return _remoteEndpointCoordinator
-                                      .registerEndpoint(
-                                          remoteConfig,
-                                          threadRunContext
-                                              .getEndpointPollManager(),
-                                          clientFd);
-                                })},
+      : _threadRunContext{threadRunContext},
+        _listenEndpoint{makeListenerEndpoint<EndpointT>(
+            listenerEndpointConfig, listenerCloseHandler,
+            listenerDisconnectHandler, listenerOnActiveHandler,
+            [this, &threadRunContext](const auto &remoteConfig, int clientFd) {
+              return _remoteEndpointCoordinator.registerEndpoint(
+                  remoteConfig, threadRunContext.getEndpointPollManager(),
+                  clientFd);
+            })},
         _remoteEndpointCoordinator{
             std::forward<decltype(remoteIncomingPayloadHandler)>(
                 remoteIncomingPayloadHandler),
             std::forward<decltype(remoteOutgoingPayloadHandler)>(
                 remoteOutgoingPayloadHandler),
-            removeCloseHandler, remoteDisconnectedHandlerT,
-            remoteOnActiveHandler},
-        _threadRunContext{threadRunContext} {}
+            remoteCloseHandler, remoteDisconnectedHandlerT,
+            remoteOnActiveHandler} {}
+
+  template <typename SocketT>
+  auto makeListenerEndpoint(const auto &listenerEndpointConfig,
+                              CloseHandlerT listenerCloseHandler,
+                              DisconnectedHandlerT listenerDisconnectHandler,
+                              OnActiveHandlerT listenerOnActiveHandler,
+                              auto &&listenerRegisterHandler) {
+    if constexpr (IsHttpServerEndpoint<SocketT>) {
+      return _threadRunContext.getSocketFactory().createHttpListenerEndpoint(
+          listenerEndpointConfig, listenerCloseHandler,
+          listenerDisconnectHandler, listenerOnActiveHandler,
+          std::forward<decltype(listenerRegisterHandler)>(
+              listenerRegisterHandler));
+    } else {
+      static_assert(IsTcpEndpoint<SocketT>);
+      return _threadRunContext.getSocketFactory().createTcpIpListenerEndpoint(
+          listenerEndpointConfig, listenerCloseHandler,
+          listenerDisconnectHandler, listenerOnActiveHandler,
+          std::forward<decltype(listenerRegisterHandler)>(
+              listenerRegisterHandler));
+    }
+  }
 
   Expected start() { return _listenEndpoint->openEndpoint(); }
 
@@ -56,9 +72,9 @@ public:
 private:
   using RemoteEndpointCoordinatorT = GroupEndpointCoordinator<EndpointT>;
 
+  ThreadRunContextT &_threadRunContext;
   IIPEndpointPtr _listenEndpoint;
   RemoteEndpointCoordinatorT _remoteEndpointCoordinator;
-  ThreadRunContextT &_threadRunContext;
 };
 
 } // namespace medici::sockets

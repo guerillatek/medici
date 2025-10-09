@@ -4,10 +4,13 @@
 #include <brotli/decode.h>
 #include <brotli/encode.h>
 
+#include "medici/http/writeBufferToTempFile.hpp"
 #include <expected>
+#include <filesystem>
 #include <string>
 #include <vector>
 #include <zlib.h>
+
 namespace medici::http {
 
 using Expected = std::expected<void, std::string>;
@@ -35,21 +38,21 @@ Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
 Expected compressBrotli(std::string_view input, std::vector<uint8_t> &output,
                         int quality = 6);
 
-inline Expected compressPayload(std::string_view input,
+Expected compressPayload(std::string_view input,
                          SupportedCompression compressionType,
-                         std::vector<uint8_t> &output) {
-  switch (compressionType) {
-  case SupportedCompression::GZip:
-  case SupportedCompression::HttpDeflate:
-  case SupportedCompression::WSDeflate:
-    return compressRFC7692(input, output, getWindowBits(compressionType));
-  case SupportedCompression::Brotli:
-    return compressBrotli(input, output);
-  default:
-    return std::unexpected("Unsupported compression type");
-  }
-}
+                         std::vector<uint8_t> &output);
 
+Expected compressFileStreamingBrotli(const std::filesystem::path &filePath,
+                                     std::vector<uint8_t> &output,
+                                     int quality = 6);
+
+Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
+                                      std::vector<uint8_t> &output,
+                                      int windowBits = 15);
+
+Expected compressFile(const std::filesystem::path &filePath,
+                      SupportedCompression compressionType,
+                      std::vector<uint8_t> &output);
 // Decompression utility functions
 
 template <typename T>
@@ -58,7 +61,7 @@ concept RawPayloadHandlerC = requires(T t) {
 };
 
 Expected
-decompressZlibBasedStreaming(const std::string &compressedPayload,
+decompressZlibBasedStreaming(std::string_view compressedPayload,
                              SupportedCompression compressionType,
                              RawPayloadHandlerC auto &&partialPayloadHandler) {
 
@@ -108,7 +111,7 @@ decompressZlibBasedStreaming(const std::string &compressedPayload,
   return Expected{}; // Indicate success
 }
 
-Expected decompressBrotliStreaming(const std::string &compressed,
+Expected decompressBrotliStreaming(std::string_view compressed,
                                    auto &&handler) {
   BrotliDecoderState *state =
       BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
@@ -153,7 +156,7 @@ Expected decompressBrotliStreaming(const std::string &compressed,
 }
 
 Expected decompressPayloadToPartialPayloadHandler(
-    const std::string &compressedPayload, SupportedCompression compressionType,
+    std::string_view compressedPayload, SupportedCompression compressionType,
     RawPayloadHandlerC auto &&partialPayloadHandler) {
   switch (compressionType) {
   case SupportedCompression::GZip:
@@ -168,16 +171,15 @@ Expected decompressPayloadToPartialPayloadHandler(
   }
 }
 
-inline std::string decompressPayloadToBuffer(const std::string &compressedPayload,
-                                      SupportedCompression compressionType) {
-  std::string decompressedPayload;
-  decompressPayloadToPartialPayloadHandler(
+Expected decompressPayloadToBuffer(std::string_view compressedPayload,
+                                   SupportedCompression compressionType,
+                                   auto &targetBuffer) {
+  return decompressPayloadToPartialPayloadHandler(
       compressedPayload, compressionType,
-      [&decompressedPayload](std::string_view chunk) {
-        decompressedPayload.append(chunk);
+      [&targetBuffer](std::string_view chunk) {
+        std::copy(chunk.begin(), chunk.end(), std::back_inserter(targetBuffer));
         return Expected{};
       });
-  return decompressedPayload;
 }
 
 } // namespace medici::http

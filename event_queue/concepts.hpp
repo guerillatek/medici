@@ -10,11 +10,22 @@
 #include <type_traits>
 
 namespace medici::event_queue {
+
 using Expected = std::expected<void, std::string>;
 using AsyncExpected = std::expected<bool, std::string>;
-
 using CallableT = std::function<Expected()>;
 using AsyncCallableT = std::function<AsyncExpected()>;
+
+class IEventQueue {
+public:
+  virtual ~IEventQueue() = default;
+  virtual Expected postAsyncAction(const AsyncCallableT &action) = 0;
+  virtual Expected postAction(const CallableT &action) = 0;
+  virtual Expected postPrecisionTimedAction(TimePoint timePoint,
+                                            const CallableT &action) = 0;
+  virtual Expected postIdleTimedAction(TimePoint timePoint,
+                                       CallableT &action) = 0;
+};
 
 template <typename T>
 concept CallableC = requires(T t) {

@@ -3,6 +3,7 @@ add_library(httpUtils SHARED
     HttpFields.cpp HttpFields.hpp
     ContentType.cpp ContentType.hpp
     CompressionUtils.cpp CompressionUtils.hpp
+    MultipartPayload.cpp MultipartPayload.hpp
 )
 
 target_compile_options(httpUtils PUBLIC -fPIC)

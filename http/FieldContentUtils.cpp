@@ -1,4 +1,6 @@
 #include "medici/http/FieldContentUtils.hpp"
+#include <algorithm>
+#include <cctype>
 #include <format>
 #include <iomanip>
 #include <regex>
@@ -12,7 +14,8 @@ static std::regex SpecialCharHexVal(R"(\%[0-9A-F][0-9A-F])");
 static std::regex Equal(R"(\=)");
 static std::regex Ampersand(R"(\&)");
 
-FieldValueMap FieldContentUtils::parseURLEncoding(const std::string &content) {
+FieldValueMap
+FieldContentUtils::parseURLEncodingToFields(const std::string &content) {
   std::string fieldName;
   std::string fieldValue;
   bool scanningField = true;
@@ -77,7 +80,7 @@ FieldValueMap FieldContentUtils::parseURLEncoding(const std::string &content) {
     } else if (match = matchFunction(content, Ampersand); !match.empty()) {
       // We're about to start a new name value pair
       // so add the current field name and value to map
-      fieldValueMap.insert({fieldName, fieldValue});
+      fieldValueMap.insert({fieldName, {fieldValue, false}});
       fieldName.clear();
       fieldValue.clear();
       scanningField = true;
@@ -88,7 +91,7 @@ FieldValueMap FieldContentUtils::parseURLEncoding(const std::string &content) {
   // We're at the end of our parsing so add the last or
   // only field name and value to map
   if ((!fieldName.empty()) && (!fieldValue.empty())) {
-    fieldValueMap.insert({fieldName, fieldValue});
+    fieldValueMap.insert({fieldName, {fieldValue, false}});
   }
   return fieldValueMap;
 }
@@ -111,48 +114,92 @@ std::string FieldContentUtils::encodeStringForURL(const std::string &str) {
   return encodedString.str();
 }
 
-std::string FieldContentUtils::encodeFieldsToURL(const FieldValueMap &values) {
+ExpectedValue
+FieldContentUtils::encodeFieldsToURL(const FieldValueMap &values) {
   std::ostringstream encodedURL;
-  for (auto &[name, value] : values) {
+  for (auto &[name, entry] : values) {
+    if (entry.isFilePath) {
+      // We don't support file paths in URL encoding
+      return std::unexpected{"File paths are not supported in URL encoding"};
+    }
     if (!encodedURL.str().empty()) {
       encodedURL << '&';
     }
-    encodedURL << encodeStringForURL(name) << '=' << encodeStringForURL(value);
+    encodedURL << encodeStringForURL(name) << '='
+               << encodeStringForURL(entry.value);
   }
   return encodedURL.str();
 }
 
-std::string FieldContentUtils::encodeFieldsToRequestHeader(
+ExpectedValue FieldContentUtils::encodeFieldsToRequestHeader(
     HTTPAction action, const std::string &uriPath, const std::string &host,
     const FieldValueMap &values) {
   std::ostringstream contentHeader;
   contentHeader << std::format("{} {} HTTP/1.1\r\n", action, uriPath);
   contentHeader << std::format("Host: {}", host);
-  loadHeaderValues(contentHeader, values);
+  if (auto result = loadHeaderValues(contentHeader, values); !result) {
+    return std::unexpected(result.error());
+  }
   return contentHeader.str();
 }
 
-std::string FieldContentUtils::encodeFieldsToResponseHeader(
+ExpectedValue FieldContentUtils::encodeFieldsToResponseHeader(
     int responseCode, const std::string &message, const FieldValueMap &values) {
   std::ostringstream contentHeader;
   contentHeader << std::format("HTTP/1.1 {} {}\r\n", responseCode, message);
-  loadHeaderValues(contentHeader, values);
+  if (auto result = loadHeaderValues(contentHeader, values); !result) {
+    return std::unexpected(result.error());
+  }
   return contentHeader.str();
 }
 
-void FieldContentUtils::loadHeaderValues(std::ostringstream &contentHeader,
-                                         const FieldValueMap &values) {
+Expected FieldContentUtils::loadHeaderValues(std::ostringstream &contentHeader,
+                                             const FieldValueMap &values) {
   std::string activeName;
-  for (const auto &[name, value] : values) {
+  for (const auto &[name, entry] : values) {
+    if (entry.isFilePath) {
+      // We don't support file paths in headers
+      return std::unexpected{"File paths are not supported in headers"};
+    }
     if (name != activeName) {
       contentHeader << "\r\n" << name << ": ";
       activeName = name;
     } else {
       contentHeader << "; ";
     }
-    contentHeader << value;
+    contentHeader << entry.value;
   }
   contentHeader << "\r\n\r\n";
+  return {};
+}
+
+bool operator==(const FieldValueMap &lhs, const FieldValueMap &rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  auto lhsIter = lhs.begin();
+  auto rhsIter = rhs.begin();
+  while (lhsIter != lhs.end() && rhsIter != rhs.end()) {
+    auto lhsStr = lhsIter->first;
+    auto rhsStr = rhsIter->first;
+    std::transform(lhsStr.begin(), lhsStr.end(), lhsStr.begin(), ::toupper);
+
+    if (lhsStr != lhsStr) {
+      return false;
+    }
+    if (lhsIter->second.isFilePath != rhsIter->second.isFilePath) {
+      return false;
+    }
+    if (!lhsIter->second.isFilePath) {
+      //We only compare values if they are not file paths (since paths may differ across systems)
+      if (lhsIter->second.value != rhsIter->second.value) {
+        return false;
+      }
+    }
+    ++lhsIter;
+    ++rhsIter;
+  }
+  return true;
 }
 
 } // namespace medici::http

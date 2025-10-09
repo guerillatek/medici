@@ -1,8 +1,11 @@
 #pragma once
 
 #include "medici/cryptoUtils/CryptoUtils.hpp"
+#include "medici/http/CompressionUtils.hpp"
 #include "medici/http/HttpFields.hpp"
 #include "medici/sockets/IPEndpointHandlerCapture.hpp"
+#include "medici/sockets/live/HTTPLiveClientEndpoint.hpp"
+#include "medici/sockets/live/HTTPLiveServerEndpoint.hpp"
 #include "medici/sockets/live/IPEndpointConnectionManager.hpp"
 #include "medici/sockets/live/IPEndpointPollManager.hpp"
 
@@ -19,15 +22,13 @@ struct DecryptedPayloadFrameBuffer {
   auto size() { return _data.size(); }
 };
 
-template <WebSocketPayloadHandlerC IncomingPayloadHandlerT,
-          WebSocketPayloadHandlerC SentOutgoingPayloadHandlerT,
-          template <class> class BaseSocketEndpoint>
-class WebSocketLiveEndpoint
-    : public IWebSocketEndpoint,
-      public HTTPLiveEndpoint<HttpPayloadHandlerT, BaseSocketEndpoint> {
-  using BaseSocketEndpointT =
-      HTTPLiveEndpoint<HttpPayloadHandlerT, BaseSocketEndpoint>;
-  using PayloadBuffer = std::vector<char>;
+template <template <template <class> class> class BaseSocketEndpoint,
+          template <class> class CoreSocketEndpoint>
+class WebSocketLiveEndpoint : public IWebSocketEndpoint,
+                              protected BaseSocketEndpoint<CoreSocketEndpoint> {
+  using BaseSocketEndpointT = BaseSocketEndpoint<CoreSocketEndpoint>;
+  using ServerSideEndpointT = HTTPLiveServerEndpoint<CoreSocketEndpoint>;
+  using ClientSideEndpointT = HTTPLiveClientEndpoint<CoreSocketEndpoint>;
 
 public:
   ~WebSocketLiveEndpoint() {
@@ -35,9 +36,10 @@ public:
       BaseSocketEndpointT::closeRemoteConnection();
     }
   };
+
   WebSocketLiveEndpoint(const HttpEndpointConfig &config,
                         IIPEndpointPollManager &endpointPollManager,
-                        IncomingPayloadHandlerT &&incomingPayloadHandler,
+                        WebSocketPayloadHandlerC auto &&incomingPayloadHandler,
                         WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,
                         CloseHandlerT closeHandler,
                         DisconnectedHandlerT disconnectedHandler,
@@ -49,7 +51,7 @@ public:
                               return handleBaseSocketInboundPayload(
                                   headers, payload, rc, tp);
                             },
-                            HttpPayloadHandlerT{},
+                            SocketPayloadHandlerT{},
                             closeHandler,
                             disconnectedHandler,
                             onActiveHandler},
@@ -60,7 +62,7 @@ public:
 
   WebSocketLiveEndpoint(int clientFd, const HttpEndpointConfig &config,
                         IIPEndpointPollManager &endpointPollManager,
-                        IncomingPayloadHandlerT &&incomingPayloadHandler,
+                        WebSocketPayloadHandlerC auto &&incomingPayloadHandler,
                         WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,
                         CloseHandlerT closeHandler,
                         DisconnectedHandlerT disconnectedHandler,
@@ -68,17 +70,16 @@ public:
       : BaseSocketEndpointT{clientFd,
                             config,
                             endpointPollManager,
-                            [this](const auto &headers, auto payload, int rc,
-                                   auto tp) {
+                            [this](const auto &headers, auto payload, auto tp) {
                               return handleBaseSocketInboundPayload(
-                                  headers, payload, rc, tp);
+                                  headers, payload, 0, tp);
                             },
-                            HttpPayloadHandlerT{},
+                            SocketPayloadHandlerT{},
                             closeHandler,
                             disconnectedHandler,
                             onActiveHandler},
         _incomingPayloadHandler{std::move(incomingPayloadHandler)},
-        _outgoingHandler{std::move(outgoingPayloadHandler)}, _serverSide{true} {
+        _outgoingHandler{std::move(outgoingPayloadHandler)} {
     _sendBuffer.reserve(2048);
   }
 
@@ -89,19 +90,25 @@ public:
     return BaseSocketEndpointT::openEndpoint();
   }
 
-  IIPEndpointDispatch &getDispatchInterface() override { return *this; }
+  IEndpointEventDispatch &getDispatchInterface() override { return *this; }
 
   const medici::ClockNowT &getClock() const override {
     return BaseSocketEndpointT::getClock();
+  }
+
+  int getEndpointUniqueId() const override {
+    return BaseSocketEndpointT::getEndpointUniqueId();
   }
 
   Expected registerTimer(const timers::IEndPointTimerPtr &timer) override {
     return BaseSocketEndpointT::registerTimer(timer);
   }
 
-  Expected onDisconnected(const std::string &reason) override {
+  Expected onDisconnected(
+      const std::string &reason,
+      const medici::sockets::IPEndpointConfig &endpointConfig) override {
     resetWebsocketState();
-    return BaseSocketEndpointT::onDisconnected(reason);
+    return BaseSocketEndpointT::onDisconnected(reason, endpointConfig);
   }
 
   bool isActive() const override {
@@ -112,11 +119,11 @@ public:
     return sendFramedPayload(WSOpCode::Text, payload);
   }
 
-  Expected sendBinary(std::string_view payload) {
+  Expected sendBinary(std::string_view payload) override {
     return sendFramedPayload(WSOpCode::Binary, payload);
   }
 
-  Expected sendPayload(WSOpCode opCode, std::string_view payload) {
+  Expected sendPayload(WSOpCode opCode, std::string_view payload) override {
     return sendFramedPayload(opCode, payload);
   }
 
@@ -133,7 +140,25 @@ public:
   }
 
   Expected sendFramedPayload(WSOpCode opCode, std::string_view payload) {
+    if (!_upgraded) {
+      return std::unexpected("WebSocket endpoint not upgraded");
+    }
     _sendBuffer.clear();
+
+    if (_deflateEnabled) {
+      if (auto deflatedResult =
+              compressPayload(payload, http::SupportedCompression::WSDeflate,
+                              this->getCompressedDataBuffer());
+          !deflatedResult) {
+        return std::unexpected(std::format(
+            "Failed to deflate websocket payload, endpoint name={}, error={}",
+            this->name(), deflatedResult.error()));
+      }
+      payload = std::string_view(reinterpret_cast<const char *>(
+                                     this->getCompressedDataBuffer().data()),
+                                 this->getCompressedDataBuffer().size());
+    }
+
     auto payloadSize = static_cast<uint16_t>(std::size(payload));
 
     _sendBuffer.push_back(static_cast<char>(0x80 | static_cast<int>(opCode)));
@@ -183,7 +208,7 @@ public:
 
   Expected disconnectEndpoint(const std::string &reason) override {
     auto result = BaseSocketEndpointT::closeRemoteConnection();
-    return onDisconnected(reason);
+    return onDisconnected(reason, this->getConfig());
   }
 
   bool supportsDeflatedPayloads() const {
@@ -192,20 +217,30 @@ public:
 
 private:
   Expected onActive() override {
-    http::HttpFields upgradeContent;
-    const auto key = crypto_utils::generateKey();
-    upgradeContent.addFieldValue("Upgrade", "websocket");
-    upgradeContent.addFieldValue("Connection", "Upgrade");
-    upgradeContent.addFieldValue("Sec-WebSocket-Version", "13");
-    upgradeContent.addFieldValue("Sec-WebSocket-Key", key);
+    if constexpr (std::is_same_v<ServerSideEndpointT, BaseSocketEndpointT>) {
+      // Server side endpoint so od nothing and wait for client to send upgrade
+      // request
+      return {};
+    }
 
-    // Add RFC 7692 deflate extension request
-    upgradeContent.addFieldValue("Sec-WebSocket-Extensions",
-                                 "permessage-deflate; client_max_window_bits");
+    if constexpr (std::is_same_v<ClientSideEndpointT, BaseSocketEndpointT>) {
+      // Client side endpoint so send the upgrade request
+      http::HttpFields upgradeHeaders;
+      const auto key = crypto_utils::generateKey();
+      upgradeHeaders.addFieldValue("Upgrade", "websocket");
+      upgradeHeaders.addFieldValue("Connection", "Upgrade");
+      upgradeHeaders.addFieldValue("Sec-WebSocket-Version", "13");
+      upgradeHeaders.addFieldValue("Sec-WebSocket-Key", key);
 
-    return BaseSocketEndpointT::sendHttpRequest(
-        http::HTTPAction::GET, upgradeContent, "",
-        http::ContentType::Unspecified, {});
+      // Add RFC 7692 deflate extension request
+      upgradeHeaders.addFieldValue(
+          "Sec-WebSocket-Extensions",
+          "permessage-deflate; client_max_window_bits");
+
+      return BaseSocketEndpointT::sendHttpRequest(
+          http::HTTPAction::GET, std::move(upgradeHeaders), "");
+    }
+    return std::unexpected("Unknown endpoint type for websocket");
   }
 
   Expected onPayloadReady(TimePoint readTime) override {
@@ -217,9 +252,7 @@ private:
       // prior to decrypting the ssl data
       _frameReadTime = readTime;
     }
-
-    auto decryptedDataBuffer = getDecryptedPayloadFrameBuffer();
-    return BaseSocketEndpointT::onPayloadReady(readTime, decryptedDataBuffer);
+    return BaseSocketEndpointT::onPayloadReady(readTime);
   }
 
   Expected handleBaseSocketInboundPayload(const http::HttpFields &headers,
@@ -227,6 +260,7 @@ private:
                                           int responseCode,
                                           TimePoint epollTime) {
     if (!_upgraded) [[unlikely]] {
+
       if (headers.getField("Upgrade") &&
           headers.getField("Upgrade").value() == "websocket") {
         _upgraded = true;
@@ -240,7 +274,8 @@ private:
                         config.name(), config.host(), config.port(),
                         this->_uriPath, payload));
       }
-      if (_serverSide) {
+
+      if constexpr (std::is_same_v<ServerSideEndpointT, BaseSocketEndpointT>) {
         // Server side endpoint so validate the client key and send the
         // upgrade response
         if (auto secKey = headers.getField("Sec-WebSocket-Key"); secKey) {
@@ -266,8 +301,7 @@ private:
           }
 
           if (auto result = BaseSocketEndpointT::sendHttpResponse(
-                  responseHeaders, 101, "Switching Protocols", "",
-                  http::ContentType::Unspecified, {});
+                  responseHeaders, 101, "Switching Protocols");
               !result) {
             return result;
           }
@@ -275,7 +309,9 @@ private:
           return std::unexpected(
               "WebSocket upgrade failed: Missing Sec-WebSocket-Key header");
         }
-      } else {
+      }
+
+      if constexpr (std::is_same_v<ClientSideEndpointT, BaseSocketEndpointT>) {
         // Client side endpoint so just check for permessage-deflate
         if (auto extField = headers.getField("Sec-WebSocket-Extensions");
             extField) {
@@ -287,12 +323,13 @@ private:
         }
         return BaseSocketEndpointT::onActive();
       }
+
+      return std::unexpected("Unknown endpoint type for websocket");
     }
     return handleWebsocketPayload(payload.size());
   }
 
   Expected handleWebsocketPayload(std::uint32_t networkBytesRead) {
-    auto &decryptedPayloadBuffer = BaseSocketEndpointT::getInboundBuffer();
     // nextMessageOffset is an offset used to establish the start of the next
     // message in the currently read buffer after one more messages have been
     // read/dispatched.This value monotonically increases by the size of current
@@ -321,7 +358,8 @@ private:
       // the start of this buffer based on the nextMessageOffset which is zero
       // for the first cycle. We update this offset once establish size of the
       // current frame we're processing to prep it for the next cycle.
-      auto wsFramePayload = decryptedPayloadBuffer.data() + nextMessageOffset;
+      auto wsFramePayload =
+          BaseSocketEndpointT::getInboundBuffer().data() + nextMessageOffset;
 
       // wsFramePayloadSize below represents the size of the content starting
       // from the wsFramePayload ptr to the end of the current buffer. We use
@@ -356,7 +394,8 @@ private:
         if (MASK) [[unlikely]] {
           return onDisconnected(
               "Received masked frame ... not handled or expected at this time. "
-              "Frame corruption has likely occurred");
+              "Frame corruption has likely occurred",
+              this->getConfig());
         }
 
         expectedFramePayloadLength = wsFramePayload[1] & WS_LENGTH;
@@ -456,10 +495,12 @@ private:
       Expected handleResult;
       switch (_firstOp) {
       case WSOpCode::ClosedConnection:
-        return onDisconnected("Connection was closed by the remote server");
+        return onDisconnected("Connection was closed by the remote server",
+                              this->getConfig());
       case WSOpCode::Continuation:
         return onDisconnected(
-            "Received continuation on message start ... expected content type");
+            "Received continuation on message start ... expected content type",
+            this->getConfig());
       case WSOpCode::Ping:
         if (auto pingResult = sendFramedPayload(WSOpCode::Pong, messagePayload);
             !pingResult) {
@@ -477,7 +518,8 @@ private:
         break;
       default:
         return onDisconnected(
-            "Decoding error ... Received unknown Websocket frame type");
+            "Decoding error ... Received unknown Websocket frame type",
+            this->getConfig());
         break;
       };
 
@@ -496,13 +538,6 @@ private:
     }
   }
 
-  auto getDecryptedPayloadFrameBuffer() {
-    return DecryptedPayloadFrameBuffer{std::string_view{
-        BaseSocketEndpointT::getInboundBuffer().data() + _writeBufferOffset,
-        BaseSocketEndpointT::getInboundBuffer().capacity() -
-            _writeBufferOffset}};
-  }
-
   Expected shiftIncompleteHdrToFrontForNextRead(
       std::uint32_t shiftContentSize,
       std::uint32_t currentFrameOffsetInBuffer) {
@@ -512,11 +547,9 @@ private:
     // the shifted data
     _pendingWSFrameContent = 0;
     _writeBufferOffset = shiftContentSize;
-    auto inboundBuffer = BaseSocketEndpointT::getInboundBuffer().data();
-    std::memmove(const_cast<char *>(inboundBuffer),
-                 inboundBuffer + currentFrameOffsetInBuffer,
-                 _writeBufferOffset);
-    return {};
+    return this->prependPartialContent(this->getInboundBuffer().data() +
+                                           currentFrameOffsetInBuffer,
+                                       shiftContentSize);
   }
 
   void updateContinuationPayload(std::string_view messagePayload) {
@@ -541,19 +574,18 @@ private:
   std::vector<char> _sendBuffer;
 
   // proprietary websocket handlers
-  IncomingPayloadHandlerT _incomingPayloadHandler;
-  SentOutgoingPayloadHandlerT _outgoingHandler;
+  WebSocketPayloadHandlerT _incomingPayloadHandler;
+  WebSocketPayloadHandlerT _outgoingHandler;
   bool _upgraded{false};
   std::optional<TimePoint> _frameReadTime;
 
   // Websocket buffer assembly/continuation
-  PayloadBuffer _continuationBuffer{};
+  std::vector<char> _continuationBuffer{};
   WSOpCode _firstOp;
   std::uint32_t _pendingWSFrameContent{0};
   bool _finalFrame{false};
   std::uint32_t _writeBufferOffset{0};
   std::uint32_t _readBufferOffset{0};
-  bool _serverSide{false}; // true if this is a server side endpoint
   bool _deflateEnabled{false};
 };
 

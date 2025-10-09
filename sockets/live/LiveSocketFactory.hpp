@@ -2,7 +2,8 @@
 #include <memory>
 
 #include "medici/event_queue/EventQueue.hpp"
-#include "medici/sockets/live/HTTPLiveEndpoint.hpp"
+#include "medici/sockets/live/HTTPLiveClientEndpoint.hpp"
+#include "medici/sockets/live/HTTPLiveServerEndpoint.hpp"
 #include "medici/sockets/live/HttpLiveListenEndpoints.hpp"
 #include "medici/sockets/live/IPEndpointPollManager.hpp"
 #include "medici/sockets/live/SSLLiveEndpoint.hpp"
@@ -73,10 +74,10 @@ public:
         closeHandler, disconnectHandler, onActiveHandler);
   }
 
-  IHttpEndpointPtr
+  IHttpClientEndpointPtr
   createHttpClientEndpoint(const HttpEndpointConfig &config,
-                           HttpPayloadHandlerC auto &&payloadHandler,
-                           HttpPayloadHandlerC auto &&outgoingPayloadHandler,
+                           HttpClientPayloadHandlerC auto &&payloadHandler,
+                           SocketPayloadHandlerC auto &&outgoingPayloadHandler,
                            CloseHandlerT closeHandler,
                            DisconnectedHandlerT disconnectHandler,
                            OnActiveHandlerT onActiveHandler) {
@@ -85,10 +86,10 @@ public:
         disconnectHandler, onActiveHandler);
   }
 
-  IHttpEndpointPtr
+  IHttpClientEndpointPtr
   createHttpsClientEndpoint(const HttpEndpointConfig &config,
-                            HttpPayloadHandlerC auto &&payloadHandler,
-                            HttpPayloadHandlerC auto &&outgoingPayloadHandler,
+                            HttpClientPayloadHandlerC auto &&payloadHandler,
+                            SocketPayloadHandlerC auto &&outgoingPayloadHandler,
                             CloseHandlerT closeHandler,
                             DisconnectedHandlerT disconnectHandler,
                             OnActiveHandlerT onActiveHandler) {
@@ -143,16 +144,15 @@ public:
 
 private:
   template <template <class> class LiveEndpointT>
-  IHttpEndpointPtr createHttpClientEndpointImpl(
+  IHttpClientEndpointPtr createHttpClientEndpointImpl(
       const HttpEndpointConfig &config,
-      HttpPayloadHandlerC auto &&payloadHandler,
-      HttpPayloadHandlerC auto &&outgoingPayloadHandler,
+      HttpClientPayloadHandlerC auto &&payloadHandler,
+      SocketPayloadHandlerC auto &&outgoingPayloadHandler,
       CloseHandlerT closeHandler, DisconnectedHandlerT disconnectHandler,
       OnActiveHandlerT onActiveHandler) {
     using IncomingHandlerT = std::decay_t<decltype(payloadHandler)>;
     using OutgoingHandlerT = std::decay_t<decltype(outgoingPayloadHandler)>;
-    return std::make_unique<
-        HTTPLiveEndpoint<IncomingHandlerT, SSLLiveEndpoint>>(
+    return std::make_unique<HTTPLiveClientEndpoint<LiveEndpointT>>(
         config, _endpointPollManager,
         std::forward<IncomingHandlerT>(payloadHandler),
         std::forward<OutgoingHandlerT>(outgoingPayloadHandler), closeHandler,
@@ -169,8 +169,8 @@ private:
 
     using IncomingHandlerT = std::decay_t<decltype(payloadHandler)>;
     using OutgoingHandlerT = std::decay_t<decltype(outgoingPayloadHandler)>;
-    return std::make_unique<WebSocketLiveEndpoint<
-        IncomingHandlerT, OutgoingHandlerT, LiveEndpointT>>(
+    return std::make_unique<
+        WebSocketLiveEndpoint<HTTPLiveClientEndpoint, LiveEndpointT>>(
         config, _endpointPollManager,
         std::forward<IncomingHandlerT>(payloadHandler),
         std::forward<OutgoingHandlerT>(outgoingPayloadHandler), closeHandler,
@@ -180,25 +180,36 @@ private:
   sockets::IIPEndpointPollManager &_endpointPollManager;
 };
 
-
-
-// Stand alone generic constructable definitions of sockets that are hard coded std::function
-// for dispatch for incoming payload handling but provide concrete definitions
-// simplifying the creation of complex endpoint frameworks like connection
-// pools, servers ...
+// Stand alone generic constructable definitions of sockets that are hard coded
+// with their std::function callable types to provide concrete
+// definitions simplifying the creation of complex endpoint frameworks like
+// connection pools, servers ...
 
 using TcpEndpoint = live::TcpIpLiveEndpoint<SocketPayloadHandlerT>;
 
 using SSLEndpoint = live::SSLLiveEndpoint<SocketPayloadHandlerT>;
 
-using HttpEndpoint =
-    HTTPLiveEndpoint<HttpPayloadHandlerT, live::TcpIpLiveEndpoint>;
+using HttpClientEndpoint = HTTPLiveClientEndpoint<live::TcpIpLiveEndpoint>;
 
-using HttpsEndpoint =
-    HTTPLiveEndpoint<HttpPayloadHandlerT, live::SSLLiveEndpoint>;
+using HttpsClientEndpoint = HTTPLiveClientEndpoint<live::SSLLiveEndpoint>;
 
-using WebSocketEndpoint =
-    WebSocketLiveEndpoint<WebSocketPayloadHandlerT, WebSocketPayloadHandlerT,
-                          live::TcpIpLiveEndpoint>;
+using HttpServerEndpoint = HTTPLiveServerEndpoint<live::TcpIpLiveEndpoint>;
 
+using HttpsServerEndpoint = HTTPLiveServerEndpoint<live::SSLLiveEndpoint>;
+
+template <template <class> class BaseHTTPEndpoint>
+using HTTPLiveClientEndpointT = HTTPLiveClientEndpoint<BaseHTTPEndpoint>;
+
+using WebSocketLiveClientEndpoint =
+    WebSocketLiveEndpoint<HTTPLiveClientEndpointT, live::TcpIpLiveEndpoint>;
+using WebSSocketLiveClientEndpoint =
+    WebSocketLiveEndpoint<HTTPLiveClientEndpointT, live::SSLLiveEndpoint>;
+
+
+
+using WebSocketLiveServerEndpoint =
+    WebSocketLiveEndpoint<HTTPLiveServerEndpoint, live::TcpIpLiveEndpoint>;
+
+using WebSSocketLiveServerEndpoint =
+    WebSocketLiveEndpoint<HTTPLiveServerEndpoint, live::SSLLiveEndpoint>;
 } // namespace medici::sockets::live

@@ -4,27 +4,23 @@
 #include "medici/sockets/EndpointConfig.hpp"
 #include "medici/sockets/WSOpCode.hpp"
 
+#include "medici/event_queue/concepts.hpp"
 #include "medici/http/ContentType.hpp"
 #include "medici/http/HTTPAction.hpp"
 #include "medici/http/HttpFields.hpp"
 
 #include <memory>
 #include <openssl/ssl.h>
+#include <optional>
 #include <utility>
-
+#include <variant>
 namespace medici::sockets {
-using Expected = std::expected<void, std::string>;
+using Expected = medici::event_queue::Expected;
+using ExpectedSize = std::expected<size_t, std::string>;
+using AsyncExpected = medici::event_queue::AsyncExpected;
 
 using ExpectedContext = std::expected<SSL_CTX *, std::string>;
-
-class IIPEndpointDispatch : public IEndpointEventDispatch {
-public:
-  IIPEndpointDispatch(const IPEndpointConfig &config) : _config{config} {}
-  auto &getConfig() const { return _config; }
-
-protected:
-  IPEndpointConfig _config;
-};
+using CallableT = medici::event_queue::CallableT;
 
 class IIPEndpoint {
 public:
@@ -33,7 +29,8 @@ public:
   virtual Expected closeEndpoint(const std::string &reason = "") = 0;
   virtual bool isActive() const = 0;
   virtual const medici::ClockNowT &getClock() const = 0;
-  virtual IIPEndpointDispatch &getDispatchInterface() = 0;
+  virtual int getEndpointUniqueId() const = 0;
+  virtual IEndpointEventDispatch &getDispatchInterface() = 0;
   virtual ~IIPEndpoint() = default;
 };
 
@@ -50,44 +47,68 @@ public:
 
 using IUdpEndpointPtr = std::unique_ptr<IUdpEndpoint>;
 
+using SendFinishHandlerT = std::move_only_function<void(Expected)>;
+
 class ITcpIpEndpoint : public IIPEndpoint {
 public:
   virtual Expected send(std::string_view buffer) = 0;
+  virtual Expected sendAsync(std::string_view buffer, CallableT &&finishCB) = 0;
 };
 
 using ITcpIpEndpointPtr = std::unique_ptr<ITcpIpEndpoint>;
+
+using HttpServerPayloadT = std::variant<http::HttpFields, std::string_view>;
 
 struct HttpResponsePayloadOptions {
   static constexpr uint8_t AllCompressionEncodings =
       (std::to_underlying(http::SupportedCompression::GZip) |
        std::to_underlying(http::SupportedCompression::HttpDeflate) |
        std::to_underlying(http::SupportedCompression::Brotli));
-  std::uint8_t acceptedCompressionEncodings{0};
+  std::uint8_t acceptedCompressionsFlag{0};
   bool decompressBeforeDispatch{false};
   bool dispatchPartialPayloads{false};
 };
 
-class IHttpEndpoint : public IIPEndpoint {
+class IHttpClientEndpoint : public IIPEndpoint {
 public:
   // Overrides value set in config
   virtual void setURIPath(const std::string &) = 0;
-  virtual Expected
   // Client side sendHttp
-  sendHttpRequest(
-      http::HTTPAction action, http::HttpFields headersValues,
+  virtual Expected sendHttpRequest(
+      http::HTTPAction action, http::HttpFields &&headersValues,
       std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
+      http::SupportedCompression compressed = http::SupportedCompression::None,
       HttpResponsePayloadOptions responsePayloadOptions = {}) = 0;
 
+  virtual Expected sendFormRequest(
+      http::HTTPAction action, http::HttpFields &&headersValues,
+      const http::HttpFields &formContent,
+      http::SupportedCompression compressed = http::SupportedCompression::None,
+      HttpResponsePayloadOptions responsePayloadOptions = {}) = 0;
+};
+
+using IHttpClientEndpointPtr = std::unique_ptr<IHttpClientEndpoint>;
+
+class IHttpServerEndpoint : public IIPEndpoint {
+public:
   // Server side sendHttp
   virtual Expected sendHttpResponse(
       http::HttpFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
-      std::optional<http::SupportedCompression> compressed = {}) = 0;
+      http::SupportedCompression compressed =
+          http::SupportedCompression::None) = 0;
+
+  virtual Expected sendFileResponse(
+      http::HttpFields headersValues, int responseCode = 200,
+      const std::string &message = "OK", std::string filePath = "",
+      http::ContentType contentType = http::ContentType::Unspecified,
+      http::SupportedCompression compressed =
+          http::SupportedCompression::None) = 0;
 };
 
-using IHttpEndpointPtr = std::unique_ptr<IHttpEndpoint>;
+using IHttpServerEndpointPtr = std::unique_ptr<IHttpServerEndpoint>;
 
 class IWebSocketEndpoint : public IIPEndpoint {
 public:
@@ -123,17 +144,23 @@ using IWebSocketListenerEndpointPtr =
 class IIPEndpointPollManager {
 public:
   // On thread local registration of endpoints
-  virtual Expected registerEndpoint(int fd, IIPEndpointDispatch &) = 0;
+  virtual Expected registerEndpoint(int fd, IEndpointEventDispatch &,
+                                    const IPEndpointConfig &) = 0;
 
   // Off thread local registration of endpoints with a callback for endpoints
   // created by listeners on another thread
   virtual Expected listenerRegisterEndpoint(int fd,
-                                            IIPEndpointDispatch &dispatch) = 0;
-  virtual Expected removeEndpoint(int fd, IIPEndpointDispatch &) = 0;
+                                            IEndpointEventDispatch &dispatch,
+                                            const IPEndpointConfig &) = 0;
+  virtual Expected removeEndpoint(int fd, IEndpointEventDispatch &,
+                                  const IPEndpointConfig &) = 0;
   virtual Expected initialize() = 0;
   virtual Expected shutdown() = 0;
-  virtual ExpectedContext getSSLContext() = 0;
+  virtual ExpectedContext getSSLClientContext() = 0;
+  virtual ExpectedContext getSSLServerContext() = 0;
   virtual const ClockNowT &getClock() const = 0;
+  virtual event_queue::IEventQueue &getEventQueue() = 0;
+  virtual ~IIPEndpointPollManager() = default;
 };
 
 } // namespace  medici::sockets

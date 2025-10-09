@@ -1,156 +1,73 @@
-#include "medici/application/IPAppRunContext.hpp"
-#include "medici/application/concepts.hpp"
-#include "medici/sockets/RemoteEndpointListener.hpp"
-#include "medici/sockets/live/LiveSocketFactory.hpp"
-#include "medici/cryptoUtils/OpenSSLUtils.hpp"
-#include <algorithm>
-#include <boost/test/unit_test.hpp>
-#include <format>
-#include <list>
-#include <memory>
-#include <random>
-#include <set>
-#include <vector>
-
-static auto sslInitialization = crypto_utils::OpenSSLUtils::initSSL();
-
-namespace utf = boost::unit_test;
-
+#include "ServerClientTestHarness.hpp"
 namespace medici::tests {
-
-using RunContextT =
-    medici::application::IPAppRunContext<sockets::live::LiveSocketFactory,
-                                         SystemClockNow,
-                                         sockets::live::IPEndpointPollManager>;
-
-struct ServerClientTestHarness {
-
-  RunContextT serverThreadContext{"Server", 1, std::chrono::microseconds{1000},
-                                  SystemClockNow{}};
-
-  RunContextT clientThreadContext{"Client", 1, std::chrono::microseconds{1000},
-                                  SystemClockNow{}};
-
-  medici::sockets::IPEndpointConfig listenEndpoint{"listenHost", "127.0.0.1",
-                                                   12345};
-
-  std::string endpointType;
-
-  medici::sockets::CloseHandlerT listenCloseHandler =
-      [this](const std::string &reason) {
-        BOOST_TEST_MESSAGE(
-            std::format(" {} listener close: reason={}", endpointType, reason));
-        return Expected{};
-      };
-  medici::sockets::CloseHandlerT listenDisconnectHandler =
-      [this](const std::string &reason) {
-        BOOST_TEST_MESSAGE(std::format(" {} listener disconnected: reason={}",
-                                       endpointType, reason));
-        return Expected{};
-      };
-
-  medici::sockets::CloseHandlerT clientCloseHandler =
-      [this](const std::string &reason) {
-        BOOST_TEST_MESSAGE(
-            std::format(" {} client close: reason={}", endpointType, reason));
-        return Expected{};
-      };
-
-  medici::sockets::DisconnectedHandlerT clientDisconnectHandler =
-      [this](const std::string &reason) {
-        BOOST_TEST_MESSAGE(std::format(" {} client disconnected: reason={}",
-                                       endpointType, reason));
-        return Expected{};
-      };
-
-  std::string testPayload = "test payload";
-  std::string serverResponse;
-  std::string clientOutgoingPayload;
-  bool serverDetectedClientActive = false;
-  std::function<Expected()> startClient;
-};
 
 template <medici::sockets::IsTcpEndpoint EndpointT>
 struct TcpClientServerTestHarness : ServerClientTestHarness {
 
-  Expected echoPayload(auto &remoteListener, std::string_view payload) {
-    return remoteListener.getEndpointCoordinator()
-        .getActiveContext()
-        .getEndpoint()
-        .send(payload);
+  TcpClientServerTestHarness() : ServerClientTestHarness(remoteClient) {
+    useAsyncSend = false;
+  }
+
+  Expected echoPayload(std::string_view payload) {
+    std::copy(payload.begin(), payload.end(),
+              std::back_inserter(serverCapturedPayload));
+    if (serverCapturedPayload.size() >= largeContent.size()) {
+      return remoteListener.getEndpointCoordinator()
+          .getActiveContext()
+          .getEndpoint()
+          .send(serverCapturedPayload);
+    }
     return {};
   }
 
-  medici::sockets::ITcpIpEndpointPtr remoteClient{
-      clientThreadContext.getSocketFactory().createTcpIpClientEndpoint(
-          listenEndpoint,
-          [this](std::string_view payload, medici::TimePoint) {
-            serverResponse = payload;
-            return remoteClient->closeEndpoint(std::format("Closing client"));
-          },
-          [this](std::string_view payload, medici::TimePoint) {
-            clientOutgoingPayload = payload;
-            return Expected{};
-          },
-          [this](const std::string &reason) {
-            BOOST_TEST_MESSAGE(
-                std::format("Closing client: reason={}", reason));
-            return clientThreadContext.stop();
-          },
-          clientDisconnectHandler,
-          [this]() {
-            BOOST_TEST_MESSAGE(std::format(" {} client Active", endpointType));
-            return remoteClient->send(testPayload);
-          })};
+  Expected echoPayloadAsyncSend(std::string_view payload) {
+    std::copy(payload.begin(), payload.end(),
+              std::back_inserter(serverCapturedPayload));
+    if (serverCapturedPayload.size() >= largeContent.size()) {
+      auto &targetEndpoint = remoteListener.getEndpointCoordinator()
+                                 .getActiveContext()
+                                 .getEndpoint();
+
+      return targetEndpoint.sendAsync(serverCapturedPayload, [this]() {
+        BOOST_TEST_MESSAGE("Async send completed");
+        serverFinishedResponse = true;
+        return Expected{};
+      });
+    }
+    return {};
+  }
+
+  medici::sockets::ITcpIpEndpointPtr remoteClient;
 
   using RemoteListener =
       medici::sockets::RemoteEndpointListener<EndpointT, RunContextT>;
 
-  TcpClientServerTestHarness() {
-
-    startClient = [this]() {
-      BOOST_TEST_MESSAGE("Starting client");
-      if (auto result = remoteClient->openEndpoint(); !result) {
-        BOOST_TEST_MESSAGE(
-            std::format("Failed to open client endpoint: {}", result.error()));
-        return result;
-      }
-      BOOST_TEST_MESSAGE("Client endpoint opened successfully");
-      return clientThreadContext.start();
-    };
-  }
-};
-
-} // namespace medici::tests
-BOOST_FIXTURE_TEST_SUITE(MediciUnitTests,
-                         medici::tests::TcpClientServerTestHarness<
-                             medici::sockets::live::TcpEndpoint>);
-
-BOOST_AUTO_TEST_CASE(TCP_TEST) {
-  BOOST_CHECK(sslInitialization);
-  using namespace medici;
-  using namespace medici::tests;
-  RemoteListener remoteListener(
-      serverThreadContext, listenEndpoint,
-      [this](const std::string &reason) {
+  RemoteListener remoteListener{
+      *(ServerClientTestHarness::serverThreadContext),
+      ServerClientTestHarness::listenEndpoint,
+      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
         BOOST_TEST_MESSAGE(std::format(" {} Listener Closing: reason={}",
                                        endpointType, reason));
-        return serverThreadContext.stop();
+        return serverThreadContext->stop();
       },
       listenDisconnectHandler,
       [this]() {
         BOOST_TEST_MESSAGE("Remote Listener Active");
-        return startClient();
-      },
-      [this, &remoteListener](std::string_view payload, medici::TimePoint) {
-        return echoPayload(remoteListener, payload);
+
+        return clientRunFunc();
       },
       [this](std::string_view payload, medici::TimePoint) {
-        serverResponse = payload;
+        if (useAsyncSend)
+          return echoPayloadAsyncSend(payload);
+        else
+          return echoPayload(payload);
+      },
+      [this](std::string_view payload, medici::TimePoint) {
         return Expected{};
       },
       clientCloseHandler,
-      [this, &remoteListener](const std::string &reason) {
+      [this](const std::string &reason,
+             const sockets::IPEndpointConfig &endpointConfig) {
         BOOST_TEST_MESSAGE(std::format(" {} client disconnected: reason={}",
                                        endpointType, reason));
         return remoteListener.stop("Ending Test");
@@ -158,18 +75,129 @@ BOOST_AUTO_TEST_CASE(TCP_TEST) {
       [this]() {
         serverDetectedClientActive = true;
         return Expected{};
-      });
+      }};
 
-  serverThreadContext.getEventQueue().postAction([this, &remoteListener]() {
-    BOOST_TEST_MESSAGE("Opening remote listener");
-    return remoteListener.start();
-  });
+  void RunTest() {
+    BOOST_CHECK(sslInitialization);
+    using namespace medici;
+    using namespace medici::tests;
 
-  endpointType = "TcpIpClear";
-  std::thread p1([this]() { serverThreadContext.start(); });
-  p1.join();
-  BOOST_CHECK_EQUAL(testPayload, serverResponse);
-  BOOST_CHECK_EQUAL(testPayload, clientOutgoingPayload);
+    serverThreadContext->getEventQueue().postAction([this]() {
+      BOOST_TEST_MESSAGE("Opening remote listener");
+      return remoteListener.start();
+    });
+    bool serverRunning = true;
+
+    std::thread p1([this, &serverRunning]() {
+      auto result = serverThreadContext->start();
+      serverRunning = false;
+      if (!result) {
+        BOOST_ERROR(
+            std::format("Server thread exited with error: {}", result.error()));
+      }
+    });
+    while (serverRunning && !clientThread)
+      ;
+    p1.join();
+    if (clientThread)
+      clientThread->join();
+    BOOST_CHECK_EQUAL(largeContent, serverResponse);
+    BOOST_CHECK_EQUAL(largeContent, clientOutgoingPayload);
+    BOOST_CHECK_EQUAL(largeContent, serverCapturedPayload);
+  }
+
+  void RunTCPTest() {
+    endpointType = "TcpIpClear";
+    remoteClient =
+        clientThreadContext->getSocketFactory().createTcpIpClientEndpoint(
+            listenEndpoint,
+            [this](std::string_view payload, medici::TimePoint) {
+              std::copy(payload.begin(), payload.end(),
+                        std::back_inserter(serverResponse));
+              auto srs = serverResponse.size();
+              auto lcs = largeContent.size();
+              if (srs >= lcs) {
+                return remoteClient->closeEndpoint(
+                    std::format("Closing client"));
+              }
+              return medici::Expected{};
+            },
+            [this](std::string_view payload, medici::TimePoint) {
+              clientOutgoingPayload = payload;
+              return medici::Expected{};
+            },
+            [this](const std::string &reason,
+                   const medici::sockets::IPEndpointConfig &) {
+              BOOST_TEST_MESSAGE(
+                  std::format("Closing client: reason={}", reason));
+              return clientThreadContext->stop();
+            },
+            clientDisconnectHandler,
+            [this]() {
+              BOOST_TEST_MESSAGE(
+                  std::format(" {} client Active", endpointType));
+              return remoteClient->send(largeContent);
+            });
+
+    RunTest();
+  }
+
+  void RunSSLTest() {
+    endpointType = "SSLTcpIp";
+    remoteClient =
+        clientThreadContext->getSocketFactory().createSSLClientEndpoint(
+            listenEndpoint,
+            [this](std::string_view payload, medici::TimePoint) {
+              std::copy(payload.begin(), payload.end(),
+                        std::back_inserter(serverResponse));
+              if (serverResponse.size() >= largeContent.size()) {
+                return remoteClient->closeEndpoint(
+                    std::format("Closing client"));
+              }
+              return medici::Expected{};
+            },
+            [this](std::string_view payload, medici::TimePoint) {
+              clientOutgoingPayload = payload;
+              return medici::Expected{};
+            },
+            [this](const std::string &reason,
+                   const medici::sockets::IPEndpointConfig &) {
+              BOOST_TEST_MESSAGE(
+                  std::format("Closing client: reason={}", reason));
+              return clientThreadContext->stop();
+            },
+            clientDisconnectHandler,
+            [this]() {
+              BOOST_TEST_MESSAGE(
+                  std::format(" {} client Active", endpointType));
+              return remoteClient->send(largeContent);
+            });
+    RunTest();
+  }
 };
 
+} // namespace medici::tests
+BOOST_FIXTURE_TEST_SUITE(MediciUnitTCPClearTests,
+                         medici::tests::TcpClientServerTestHarness<
+                             medici::sockets::live::TcpEndpoint>);
+
+BOOST_AUTO_TEST_CASE(TCP_TEST) { RunTCPTest(); };
+BOOST_AUTO_TEST_CASE(TCP_TEST_ASYNC_SEND) {
+  useAsyncSend = true;
+  RunTCPTest();
+  BOOST_CHECK(serverFinishedResponse);
+};
+
+BOOST_AUTO_TEST_SUITE_END();
+
+BOOST_FIXTURE_TEST_SUITE(MediciUnitTCPSSLTests,
+                         medici::tests::TcpClientServerTestHarness<
+                             medici::sockets::live::SSLEndpoint>);
+
+BOOST_AUTO_TEST_CASE(SSL_TEST) { RunSSLTest(); };
+BOOST_AUTO_TEST_CASE(SSL_TEST_ASYNC_SEND) {
+  useAsyncSend = true;
+  RunSSLTest();
+  BOOST_CHECK(serverFinishedResponse);
+};
 BOOST_AUTO_TEST_SUITE_END();

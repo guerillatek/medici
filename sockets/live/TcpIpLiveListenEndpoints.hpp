@@ -22,7 +22,6 @@ public:
             closeHandler,
             disconnectedHandler,
             onActiveHandler} {}
-
 };
 
 } // namespace medici::sockets::live

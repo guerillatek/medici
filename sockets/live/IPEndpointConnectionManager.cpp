@@ -13,16 +13,17 @@
 namespace medici::sockets::live {
 
 IPEndpointConnectionManager::IPEndpointConnectionManager(
-    IIPEndpointPollManager &endPointPollManager,
-    IIPEndpointDispatch &endPointDispatch, ConnectionType connectionType)
-    : _endPointPollManager{endPointPollManager},
+    const IPEndpointConfig &config, IIPEndpointPollManager &endPointPollManager,
+    IEndpointEventDispatch &endPointDispatch, ConnectionType connectionType)
+    : _config{config}, _endPointPollManager{endPointPollManager},
       _endPointDispatch{endPointDispatch}, _connectionType{connectionType} {}
 
 IPEndpointConnectionManager::IPEndpointConnectionManager(
-    int fd, IIPEndpointPollManager &endPointPollManager,
-    IIPEndpointDispatch &endPointDispatch, ConnectionType connectionType,
+    const IPEndpointConfig &config, int fd,
+    IIPEndpointPollManager &endPointPollManager,
+    IEndpointEventDispatch &endPointDispatch, ConnectionType connectionType,
     std::function<Expected()> onActive)
-    : _endPointPollManager{endPointPollManager},
+    : _config{config}, _endPointPollManager{endPointPollManager},
       _endPointDispatch{endPointDispatch}, _connectionType{connectionType},
       _fd{fd} {
 
@@ -31,18 +32,21 @@ IPEndpointConnectionManager::IPEndpointConnectionManager(
       0) {
     throw std::runtime_error(std::format(
         "Failed to set socket 'Keep Alive' option errno={}, name={}",
-        strerror(errno), _endPointDispatch.getConfig().name()));
+        strerror(errno), _config.name()));
   }
 
   if (setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) <
       0) {
     throw std::runtime_error(
         std::format("Failed to set socket 'No Delay' option errno={}, name={}",
-                    strerror(errno), _endPointDispatch.getConfig().name()));
+                    strerror(errno), _config.name()));
   }
 
-  if (onActive()) {
-    endPointPollManager.listenerRegisterEndpoint(fd, endPointDispatch);
+  if (onActive) {
+    endPointPollManager.listenerRegisterEndpoint(fd, endPointDispatch, _config);
+    if (auto result = onActive(); !result) {
+      throw std::runtime_error(result.error());
+    }
   }
 }
 
@@ -52,23 +56,23 @@ Expected IPEndpointConnectionManager::open() {
   case ConnectionType::SSL:
   case ConnectionType::TCP: {
     int flag = 1;
-    if ((_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_IP)) < 0) {
+    if ((_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP)) < 0) {
       return std::unexpected(
           std::format("Failed to create socket errno={}, name={}",
-                      strerror(errno), _endPointDispatch.getConfig().name()));
+                      strerror(errno), _config.name()));
     }
     if (setsockopt(_fd, IPPROTO_TCP, SO_KEEPALIVE, (char *)&flag, sizeof(int)) <
         0) {
       return std::unexpected(std::format(
           "Failed to set socket 'Keep Alive' option errno={}, name={}",
-          strerror(errno), _endPointDispatch.getConfig().name()));
+          strerror(errno), _config.name()));
     }
 
     if (setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) <
         0) {
       return std::unexpected(std::format(
           "Failed to set socket 'No Delay' option errno={}, name={}",
-          strerror(errno), _endPointDispatch.getConfig().name()));
+          strerror(errno), _config.name()));
     }
     break;
   }
@@ -77,7 +81,7 @@ Expected IPEndpointConnectionManager::open() {
     if ((_fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
       return std::unexpected(
           std::format("Failed to create UDP socket errno={}, name={}",
-                      strerror(errno), _endPointDispatch.getConfig().name()));
+                      strerror(errno), _config.name()));
     }
     break;
   }
@@ -88,37 +92,32 @@ Expected IPEndpointConnectionManager::open() {
   if (fcntl(_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
     return std::unexpected(
         std::format("Failed to set non blocking, errno={}, name={}",
-                    strerror(errno), _endPointDispatch.getConfig().name()));
+                    strerror(errno), _config.name()));
   }
 
   // Set address
   struct sockaddr_in remoteAddress;
   remoteAddress.sin_family = AF_INET;
-  remoteAddress.sin_port = htons(_endPointDispatch.getConfig().port());
-  struct hostent *const he =
-      gethostbyname(_endPointDispatch.getConfig().host().c_str());
+  remoteAddress.sin_port = htons(_config.port());
+  struct hostent *const he = gethostbyname(_config.host().c_str());
   if (not he) {
-    return std::unexpected(
-        std::format("Invalid remote host={}:{}, errno={}, name={}",
-                    _endPointDispatch.getConfig().host(),
-                    _endPointDispatch.getConfig().port(), strerror(errno),
-                    _endPointDispatch.getConfig().name()));
+    return std::unexpected(std::format(
+        "Invalid remote host={}:{}, errno={}, name={}", _config.host(),
+        _config.port(), strerror(errno), _config.name()));
   }
   memcpy(&remoteAddress.sin_addr.s_addr, he->h_addr_list[0], 4);
 
   // Bind to interface if specifed in the config
-  if (!_endPointDispatch.getConfig().interface().empty()) {
+  if (!_config.interface().empty()) {
     if (::bind(_fd, (const sockaddr *)&remoteAddress, sizeof(remoteAddress)) <
         9) {
       return std::unexpected(std::format(
           "Failed to bind socket to interface={}, errno={}, name={}",
-          _endPointDispatch.getConfig().interface(), strerror(errno),
-          _endPointDispatch.getConfig().name()));
+          _config.interface(), strerror(errno), _config.name()));
     }
   }
 
-  int inboundBufferSize =
-      static_cast<int>(_endPointDispatch.getConfig().inBufferKB() * 1024);
+  int inboundBufferSize = static_cast<int>(_config.inBufferKB() * 1024);
   setsockopt(_fd, SOL_SOCKET, SO_RCVBUF, &inboundBufferSize,
              sizeof(inboundBufferSize));
 
@@ -136,9 +135,7 @@ Expected IPEndpointConnectionManager::open() {
       default:
         return std::unexpected(std::format(
             "Failed to connect to remote host={}:{}, errno={}, name={}",
-            _endPointDispatch.getConfig().host(),
-            _endPointDispatch.getConfig().port(), strerror(errno),
-            _endPointDispatch.getConfig().name()));
+            _config.host(), _config.port(), strerror(errno), _config.name()));
       };
       result = connect(_fd, (struct sockaddr *)&remoteAddress,
                        sizeof(remoteAddress));
@@ -148,8 +145,7 @@ Expected IPEndpointConnectionManager::open() {
   case ConnectionType::MCAST: {
     struct ip_mreq mreq;
     // Join the multicast group
-    mreq.imr_multiaddr.s_addr =
-        inet_addr(_endPointDispatch.getConfig().host().c_str());
+    mreq.imr_multiaddr.s_addr = inet_addr(_config.host().c_str());
     mreq.imr_interface.s_addr =
         htonl(INADDR_ANY); // Use default network interface
 
@@ -158,7 +154,7 @@ Expected IPEndpointConnectionManager::open() {
       return std::unexpected(
           std::format("Failed to set membership options on multicast "
                       "connection, errno={}, name={}",
-                      strerror(errno), _endPointDispatch.getConfig().name()));
+                      strerror(errno), _config.name()));
     }
   }
   case ConnectionType::UDP:
@@ -166,7 +162,8 @@ Expected IPEndpointConnectionManager::open() {
   };
 
   if (_connectionType != ConnectionType::SSL) {
-    return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch);
+    return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch,
+                                                 _config);
   }
   return {};
 }
@@ -180,20 +177,20 @@ Expected IPEndpointConnectionManager::openListener() {
     if ((_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_IP)) < 0) {
       return std::unexpected(
           std::format("Failed to create socket errno={}, name={}",
-                      strerror(errno), _endPointDispatch.getConfig().name()));
+                      strerror(errno), _config.name()));
     }
     if (setsockopt(_fd, IPPROTO_TCP, SO_KEEPALIVE, (char *)&flag, sizeof(int)) <
         0) {
       return std::unexpected(std::format(
           "Failed to set socket 'Keep Alive' option errno={}, name={}",
-          strerror(errno), _endPointDispatch.getConfig().name()));
+          strerror(errno), _config.name()));
     }
 
     if (setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) <
         0) {
       return std::unexpected(std::format(
           "Failed to set socket 'No Delay' option errno={}, name={}",
-          strerror(errno), _endPointDispatch.getConfig().name()));
+          strerror(errno), _config.name()));
     }
 
     // Set SO_REUSEADDR to avoid "address already in use" errors on restart
@@ -201,14 +198,14 @@ Expected IPEndpointConnectionManager::openListener() {
     if (setsockopt(_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
       return std::unexpected(std::format(
           "Failed to set socket 'Reuse Address' option errno={}, name={}",
-          strerror(errno), _endPointDispatch.getConfig().name()));
+          strerror(errno), _config.name()));
     }
     break;
   }
   default: {
     return std::unexpected(std::format(
         "Cannot open listener endpoint for  name={}, must be TCP or SSL",
-        _endPointDispatch.getConfig().name()));
+        _config.name()));
   }
   };
 
@@ -217,42 +214,37 @@ Expected IPEndpointConnectionManager::openListener() {
   if (fcntl(_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
     return std::unexpected(
         std::format("Failed to set non blocking, errno={}, name={}",
-                    strerror(errno), _endPointDispatch.getConfig().name()));
+                    strerror(errno), _config.name()));
   }
 
   // Set address
-  struct sockaddr_in remoteAddress;
-  remoteAddress.sin_family = AF_INET;
-  remoteAddress.sin_port = htons(_endPointDispatch.getConfig().port());
-  struct hostent *const he =
-      gethostbyname(_endPointDispatch.getConfig().host().c_str());
+  struct sockaddr_in listenAddress;
+  listenAddress.sin_family = AF_INET;
+  listenAddress.sin_port = htons(_config.port());
+  listenAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+  struct hostent *const he = gethostbyname(_config.host().c_str());
   if (not he) {
-    return std::unexpected(
-        std::format("Invalid remote host={}:{}, errno={}, name={}",
-                    _endPointDispatch.getConfig().host(),
-                    _endPointDispatch.getConfig().port(), strerror(errno),
-                    _endPointDispatch.getConfig().name()));
+    return std::unexpected(std::format(
+        "Invalid remote host={}:{}, errno={}, name={}", _config.host(),
+        _config.port(), strerror(errno), _config.name()));
   }
-  memcpy(&remoteAddress.sin_addr.s_addr, he->h_addr_list[0], 4);
+  memcpy(&listenAddress.sin_addr.s_addr, he->h_addr_list[0], 4);
 
-  // Bind to interface if specifed in the config
-  if (!_endPointDispatch.getConfig().interface().empty()) {
-    if (::bind(_fd, (const sockaddr *)&remoteAddress, sizeof(remoteAddress)) <
-        9) {
-      return std::unexpected(std::format(
-          "Failed to bind socket to interface={}, errno={}, name={}",
-          _endPointDispatch.getConfig().interface(), strerror(errno),
-          _endPointDispatch.getConfig().name()));
-    }
+  // Bind to listen address and port
+  if (bind(_fd, reinterpret_cast<sockaddr *>(&listenAddress),
+           sizeof(listenAddress)) == -1) {
+    return std::unexpected(
+        std::format("Failed to bind socket to interface={}, errno={}, name={}",
+                    _config.interface(), strerror(errno), _config.name()));
   }
 
   if (listen(_fd, SOMAXCONN) == -1) {
     return std::unexpected(
         std::format("Failed to listen on socket, errno={}, name={}",
-                    strerror(errno), _endPointDispatch.getConfig().name()));
+                    strerror(errno), _config.name()));
   }
 
-  return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch);
+  return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch, _config);
 }
 
 Expected IPEndpointConnectionManager::send(std::string_view payload) {
@@ -261,29 +253,35 @@ Expected IPEndpointConnectionManager::send(std::string_view payload) {
     if (bytes_sent <= 0) {
       return std::unexpected(
           std::format("Failed to send payload on endpoint name={} ",
-                      _endPointDispatch.getConfig().name(), strerror(errno)));
+                      _config.name(), strerror(errno)));
     }
-    if (static_cast<size_t>(bytes_sent) < payload.size()) {
-      payload = std::string_view{payload.data() + bytes_sent,
-                                 payload.size() - bytes_sent};
-    } else {
-      break;
-    }
+    payload.remove_prefix(bytes_sent);
   }
   return {};
 }
 
+ExpectedSize IPEndpointConnectionManager::sendAsync(std::string_view payload) {
+  ssize_t bytes_sent = ::send(_fd, payload.data(), payload.size(), 0);
+  if (bytes_sent <= 0) {
+    return std::unexpected(
+        std::format("Failed to send payload on endpoint name={} ",
+                    _config.name(), strerror(errno)));
+  }
+  return bytes_sent;
+}
+
 Expected IPEndpointConnectionManager::setClosed() {
-  _endPointPollManager.removeEndpoint(_fd, _endPointDispatch);
+  _endPointPollManager.removeEndpoint(_fd, _endPointDispatch, _config);
   _fd = 0;
   return {};
 }
 
 Expected IPEndpointConnectionManager::close() {
   if (::close(_fd)) {
+    return setClosed();
     return std::unexpected(
         std::format("Shutdown attempted close endpoint name={} ",
-                    _endPointDispatch.getConfig().name(), strerror(errno)));
+                    _config.name(), strerror(errno)));
   }
 
   return setClosed();

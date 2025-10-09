@@ -2,37 +2,54 @@
 
 #include "medici/http/CompressionUtils.hpp"
 #include "medici/http/HttpFields.hpp"
+#include "medici/http/MultipartPayload.hpp"
 #include "medici/sockets/IPEndpointHandlerCapture.hpp"
 #include "medici/sockets/concepts.hpp"
 #include "medici/sockets/live/IPEndpointConnectionManager.hpp"
 #include "medici/sockets/live/IPEndpointPollManager.hpp"
 
 #include <deque>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <spanstream>
 
 namespace medici::sockets::live {
+
+enum class HttpEndpointState {
+  AwaitingUserRequest,   // Client only
+  AwaitingClientRequest, // Server only
+  AwaitingResponse,      // Client only
+  ReadingRequestMsgLine, // Server only
+  ReadingHeaders,
+  ReadingChunks,
+  ReadingContent,
+  WebsocketPassthrough
+};
 
 struct HttpResponseHeader {
   int responseCode{200};
   std::string message{"OK"};
 };
-
+using QueueContentT = std::variant<std::string, std::filesystem::path,
+                                   http::HttpFields, http::MultipartPayload>;
 struct HttpSendQueueEntry {
   std::optional<http::HTTPAction> action;
   http::HttpFields headersValues;
   std::optional<HttpResponseHeader>
-      responseHeader; // Optional message for response
-  std::string content;
-  http::ContentType contentType;
-  std::string uriPath;
-  HttpResponsePayloadOptions responsePayloadOptions;
+      responseHeader; // For server side queued responses
+  QueueContentT content;
+  http::SupportedCompression compression{http::SupportedCompression::None};
+  std::string uriPath{};
+  std::string queryString{};
+  std::optional<HttpResponsePayloadOptions> responsePayloadOptions{};
 };
 
 template <HttpPayloadHandlerC IncomingPayloadHandlerT,
-          template <class> class BaseSocketEndpoint>
-class HTTPLiveEndpoint : public IHttpEndpoint,
-                         public BaseSocketEndpoint<SocketPayloadHandlerT> {
+          template <class> class BaseSocketEndpoint, typename EndpointInterface>
+class HTTPLiveEndpoint : public EndpointInterface,
+                         protected BaseSocketEndpoint<SocketPayloadHandlerT> {
+
   using BaseSocketEndpointT = BaseSocketEndpoint<SocketPayloadHandlerT>;
   using ParseExpected = std::expected<std::string, std::string>;
   using HttpSendQueue = std::deque<HttpSendQueueEntry>;
@@ -41,22 +58,26 @@ public:
   HTTPLiveEndpoint(const HttpEndpointConfig &config,
                    IIPEndpointPollManager &endpointPollManager,
                    IncomingPayloadHandlerT &&incomingPayloadHandler,
-                   HttpPayloadHandlerC auto &&outgoingPayloadHandler,
+                   SocketPayloadHandlerC auto &&outgoingPayloadHandler,
                    CloseHandlerT closeHandler,
                    DisconnectedHandlerT DisconnectedHandlerT,
                    OnActiveHandlerT onActiveHandler)
-      : BaseSocketEndpointT{
-            config,
-            endpointPollManager,
-            [this](auto payload, auto tp) {
-              return handleBaseSocketInboundPayload(payload, tp);
-            },
-            [this](auto payload, auto tp) { return Expected{}; },
-            closeHandler,
-            DisconnectedHandlerT,
-            onActiveHandler},
+      : BaseSocketEndpointT{config,
+                            endpointPollManager,
+                            [this](auto payload, auto tp) {
+                              return handleBaseSocketInboundPayload(payload,
+                                                                    tp);
+                            },
+                            std::forward<decltype(outgoingPayloadHandler)>(
+                                outgoingPayloadHandler),
+                            closeHandler,
+                            DisconnectedHandlerT,
+                            onActiveHandler},
         _uriPath{config.uriPath()},
-        _payLoadHandler{std::move(incomingPayloadHandler)} {}
+        _payLoadHandler{std::move(incomingPayloadHandler)} {
+    _serverSide = false;
+    _state = HttpEndpointState::AwaitingUserRequest; // Client only
+  }
 
   HTTPLiveEndpoint(int fd, const HttpEndpointConfig &config,
                    IIPEndpointPollManager &endpointPollManager,
@@ -66,18 +87,23 @@ public:
                    DisconnectedHandlerT DisconnectedHandlerT,
                    OnActiveHandlerT onActiveHandler)
       : BaseSocketEndpointT{fd,
-                            config,
+                            static_cast<const IPEndpointConfig &>(config),
                             endpointPollManager,
                             [this](auto payload, auto tp) {
                               return handleBaseSocketInboundPayload(payload,
                                                                     tp);
                             },
-                            outgoingPayloadHandler,
+                            std::forward<decltype(outgoingPayloadHandler)>(
+                                outgoingPayloadHandler),
                             closeHandler,
                             DisconnectedHandlerT,
                             onActiveHandler},
         _uriPath{config.uriPath()},
-        _payLoadHandler{std::move(incomingPayloadHandler)} {}
+        _payLoadHandler{std::move(incomingPayloadHandler)} {
+    _serverSide = true;
+    _state = HttpEndpointState::AwaitingClientRequest;
+  }
+
   ~HTTPLiveEndpoint() = default;
 
   const std::string &name() const override {
@@ -98,172 +124,286 @@ public:
     return BaseSocketEndpointT::getClock();
   }
 
-  IIPEndpointDispatch &getDispatchInterface() override { return *this; }
+  int getEndpointUniqueId() const override {
+    return BaseSocketEndpointT::getEndpointUniqueId();
+  }
+
+  IEndpointEventDispatch &getDispatchInterface() override { return *this; }
   // Overrides value set in config
   void setURIPath(const std::string &path) { _uriPath = path; }
 
-  Expected
-  sendHttpRequest(http::HTTPAction action, http::HttpFields headersValues,
-                  std::string_view content, http::ContentType contentType,
-                  HttpResponsePayloadOptions responsePayloadOptions) override {
-
-    if (responsePayloadOptions.acceptedCompressionEncodings) {
-      std::string acceptedCompressionEncodings;
-      if (responsePayloadOptions.acceptedCompressionEncodings &
-          std::to_underlying(http::SupportedCompression::GZip)) {
-        acceptedCompressionEncodings = "gzip";
-      }
-
-      if (responsePayloadOptions.acceptedCompressionEncodings &
-          std::to_underlying(http::SupportedCompression::HttpDeflate)) {
-        if (!acceptedCompressionEncodings.empty()) {
-          acceptedCompressionEncodings += ", ";
-        }
-        acceptedCompressionEncodings += "deflate";
-      }
-
-      if (responsePayloadOptions.acceptedCompressionEncodings &
-          std::to_underlying(http::SupportedCompression::Brotli)) {
-        if (!acceptedCompressionEncodings.empty()) {
-          acceptedCompressionEncodings += ", ";
-        }
-        acceptedCompressionEncodings += "br";
-      }
-
-      if (!acceptedCompressionEncodings.empty()) {
-        headersValues.addFieldValue("Accept-Encoding",
-                                    acceptedCompressionEncodings);
-      }
-
-      if (responsePayloadOptions.decompressBeforeDispatch &&
-          responsePayloadOptions.dispatchPartialPayloads) {
+protected:
+  Expected clarifySendHeaders(http::HttpFields &headersValues,
+                              std::string_view content,
+                              http::ContentType contentType,
+                              http::SupportedCompression compression) {
+    if (contentType != http::ContentType::Unspecified) {
+      if (headersValues.HasField("Content-Type")) {
         return std::unexpected(
-            "Partial payloads cannot be decompressed before dispatching");
+            "Passing headers with 'Content-Type' header set in tandem "
+            "'contentType' parameter on "
+            "send is ambiguous. Set 'Content-Type' header manually when passed "
+            "content has proprietary type not covered by the enumerated "
+            "values ");
       }
-    } else {
-      if (responsePayloadOptions.decompressBeforeDispatch) {
-        return std::unexpected(
-            "Decompressing before dispatching requires accepting compression "
-            "encodings");
-      }
+      // Set the Content-Type header using the passed parameter
+      headersValues.addFieldValue("Content-Type",
+                                  std::format("{}", contentType));
+    } else if ((!content.empty()) && !headersValues.HasField("Content-Type")) {
+      return std::unexpected(
+          "Cannot send non empty content without setting "
+          "'Content-Type' header or 'contentType' parameter.");
     }
 
-    auto canSend = _sendQueue.empty();
-    _sendQueue.emplace_back(action, headersValues, std::nullopt,
-                            std::string{content}, contentType, _uriPath,
-                            responsePayloadOptions);
-    if (canSend) {
-      return sendQueuedHttpData();
+    if (compression != http::SupportedCompression::None) {
+      if (headersValues.HasField("Content-Encoding")) {
+        return std::unexpected(
+            "Passing headers with 'Content-Encoding' header set in tandem "
+            "'compression' parameter on"
+            "send is ambiguous. Set 'Content-Encoding' header manually when "
+            "passed "
+            "content is already compressed");
+      }
+
+      std::string contentEncoding;
+      switch (compression) {
+      case http::SupportedCompression::GZip:
+        contentEncoding = "gzip";
+        break;
+      case http::SupportedCompression::HttpDeflate:
+        contentEncoding = "deflate";
+        break;
+      case http::SupportedCompression::Brotli:
+        contentEncoding = "br";
+        break;
+      default:
+        return std::unexpected(
+            std::format("Unsupported compression type '{}'", compression));
+      }
+      headersValues.addFieldValue("Content-Encoding", contentEncoding);
     }
     return {};
   }
 
-  Expected sendHttpResponse(
-      http::HttpFields headersValues, int responseCode,
-      const std::string &message, std::string_view content = "",
-      http::ContentType contentType = http::ContentType::Unspecified,
-      std::optional<http::SupportedCompression> compressed = {}) override {
-    auto canSend = _sendQueue.empty();
-    _sendQueue.emplace_back(std::nullopt, headersValues,
-                            HttpResponseHeader{responseCode, message},
-                            std::string{content}, contentType, _uriPath);
-    if (canSend) {
-      if (compressed) {
-        std::string contentEncoding;
-        switch (*compressed) {
-        case http::SupportedCompression::GZip:
-          contentEncoding = "gzip";
-          break;
-        case http::SupportedCompression::HttpDeflate:
-          contentEncoding = "deflate";
-          break;
-        case http::SupportedCompression::Brotli:
-          contentEncoding = "br";
-          break;
-        default:
-          return std::unexpected(
-              std::format("Unsupported compression type '{}'", *compressed));
-        }
-        _sendQueue.back().headersValues.addFieldValue("Content-Encoding",
-                                                      contentEncoding);
-      }
+  Expected sendQueuedHttpData() {
+    if (_sendQueue.empty()) {
+      return {};
     }
 
-    return sendQueuedHttpData();
-  }
-
-private:
-  Expected sendQueuedHttpData() {
-
-    auto &activeQueueEntry = _sendQueue.back();
+    auto &activeQueueEntry = _sendQueue.front();
     auto &headersValues = activeQueueEntry.headersValues;
     auto &responseHeader = activeQueueEntry.responseHeader;
     auto &content = activeQueueEntry.content;
+    auto &compressionEncoding = activeQueueEntry.compression;
     auto action = activeQueueEntry.action;
     _uriPath = activeQueueEntry.uriPath;
-    if (std::size(content) > 0) {
-      headersValues.addFieldValue(
-          "Content-Type", std::format("{}", activeQueueEntry.contentType));
-      headersValues.addFieldValue(
-          "Content-Length", std::to_string(activeQueueEntry.content.size()));
-    }
-    std::string payload;
-    if (responseHeader) {
-      payload = headersValues.encodeFieldsToResponseHeader(
-          responseHeader->responseCode, responseHeader->message);
-    } else {
-      payload = headersValues.encodeFieldsToRequestHeader(
-          *action, _uriPath, this->getConfig().host());
-    }
+    _queryString = activeQueueEntry.queryString;
+    _responsePayloadOptions = activeQueueEntry.responsePayloadOptions;
+    _compressedData.clear();
 
-    if (headersValues.HasField("Content-Encoding")) {
-      auto encodingStr = headersValues.getField("Content-Encoding").value();
-      http::SupportedCompression compressionEncoding =
-          http::SupportedCompression::None;
-      if (encodingStr == "gzip") {
-        compressionEncoding = http::SupportedCompression::GZip;
-      } else if (encodingStr == "deflate") {
-        compressionEncoding = http::SupportedCompression::HttpDeflate;
-      } else if (encodingStr == "br") {
-        compressionEncoding = http::SupportedCompression::Brotli;
-      }
-      _compressedData.clear();
-      auto compressionResult =
-          http::compressPayload(content, compressionEncoding, _compressedData);
+    auto compressStringContent =
+        [&](const std::string &targetContent) -> Expected {
+      auto compressionResult = http::compressPayload(
+          targetContent, compressionEncoding, _compressedData);
       if (!compressionResult) {
         return std::unexpected(
             std::format("Failed to compress outgoing payload: error={}",
                         compressionResult.error()));
       }
+      headersValues.addFieldValue("Content-Length",
+                                  std::to_string(_compressedData.size()));
+      return {};
+    };
+
+    Expected updateContentLengthResult = std::visit(
+        [&, this](auto &targetContent) -> Expected {
+          using T = std::decay_t<decltype(targetContent)>;
+          if constexpr (std::is_same_v<T, std::string>) {
+            if (std::size(targetContent) > 0) {
+              if (compressionEncoding != http::SupportedCompression::None) {
+                return compressStringContent(targetContent);
+              } else {
+                headersValues.addFieldValue(
+                    "Content-Length", std::to_string(targetContent.size()));
+              }
+            }
+          } else if constexpr (std::is_same_v<T, http::HttpFields>) {
+            auto encodedFormResult = targetContent.encodeAsQueryString();
+            if (!encodedFormResult) {
+              return std::unexpected(std::format(
+                  "Failed to encode form content as URL encoded string: "
+                  "error={}",
+                  encodedFormResult.error()));
+            }
+            auto encodedForm = encodedFormResult.value();
+            if (!encodedForm.empty()) {
+
+              content = encodedForm; // reassign as std::string
+              if (compressionEncoding != http::SupportedCompression::None) {
+                return compressStringContent(encodedForm);
+              }
+              headersValues.addFieldValue("Content-Length",
+                                          std::to_string(encodedForm.size()));
+            }
+
+          } else if constexpr (std::is_same_v<T, std::filesystem::path>) {
+
+            if (compressionEncoding != http::SupportedCompression::None) {
+              auto compressionResult = http::compressFile(
+                  targetContent, compressionEncoding, _compressedData);
+              if (!compressionResult) {
+                return std::unexpected(std::format(
+                    "Failed to compress outgoing file payload: error={}",
+                    compressionResult.error()));
+              }
+              headersValues.addFieldValue(
+                  "Content-Length", std::to_string(_compressedData.size()));
+            } else {
+              auto fileSize = std::filesystem::file_size(targetContent);
+              if (fileSize > 0) {
+                headersValues.addFieldValue("Content-Length",
+                                            std::to_string(fileSize));
+              }
+            }
+          }
+          return {};
+        },
+        content);
+
+    if (!updateContentLengthResult) {
+      return updateContentLengthResult;
+    }
+
+    std::string payload;
+    if (responseHeader) {
+      // Send a Response
+      auto result = headersValues.encodeFieldsToResponseHeader(
+          responseHeader->responseCode, responseHeader->message);
+      if (!result) {
+        return std::unexpected(std::format(
+            "Failed to encode HTTP response header: error={}", result.error()));
+      }
+      payload = result.value();
+    } else {
+      // Send a Request
+      auto result = headersValues.encodeFieldsToRequestHeader(
+          *action, _uriPath, this->getConfig().host());
+      if (!result) {
+        return std::unexpected(std::format(
+            "Failed to encode HTTP request header: error={}", result.error()));
+      }
+      payload = result.value();
+    }
+
+    // If we have compressed data set, then just send that
+    // as any relevant content would have been compressed
+    // into this buffer at this point
+    if (_compressedData.empty() == false) {
       std::copy(_compressedData.begin(), _compressedData.end(),
                 std::back_inserter(payload));
+      return BaseSocketEndpointT::sendAsync(payload, [this]() {
+        _sendQueue.pop_front();
+        return sendQueuedHttpData();
+      });
+    }
+
+    return std::visit(
+        [&, this](auto &targetContent) -> Expected {
+          using T = std::decay_t<decltype(targetContent)>;
+          if constexpr (std::is_same_v<T, std::filesystem::path>) {
+            return BaseSocketEndpointT::sendAsync(
+                payload, [this, targetContent]() {
+                  return sendFileContent(targetContent, [this]() {
+                    _sendQueue.pop_front();
+                    return sendQueuedHttpData();
+                  });
+                });
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            payload += targetContent;
+            return BaseSocketEndpointT::sendAsync(payload, [this]() {
+              _sendQueue.pop_front();
+              return sendQueuedHttpData();
+            });
+          } else if constexpr (std::is_same_v<T, http::MultipartPayload>) {
+            auto partialPayload = targetContent.partialEncodeNonFileToString();
+            if (!partialPayload) {
+              return std::unexpected(
+                  std::format("Failed to encode multipart payload: error={}",
+                              partialPayload.error()));
+            }
+            payload += partialPayload.value();
+            return BaseSocketEndpointT::sendAsync(
+                payload, [this, targetContent]() {
+                  return sendMultipartFiles(targetContent, [this]() {
+                    _sendQueue.pop_front();
+                    return sendQueuedHttpData();
+                  });
+                });
+          }
+          return std::unexpected("Unsupported content type in send queue");
+        },
+        content);
+  }
+
+  Expected sendFileContent(const std::filesystem::path &filePath,
+                           CallableT &&onSendComplete) {
+    _activeFileStream =
+        std::make_unique<std::ifstream>(filePath, std::ios::binary);
+    if (!_activeFileStream->is_open()) {
+      return std::unexpected("Failed to open file");
+    }
+
+    return sendFileChunk(std::move(onSendComplete));
+  }
+
+  Expected sendFileChunk(CallableT &&onSendComplete) {
+    char buffer[8192];
+
+    if (_activeFileStream->read(buffer, sizeof(buffer)) ||
+        _activeFileStream->gcount() > 0) {
+      auto bytesRead = _activeFileStream->gcount();
+
+      return BaseSocketEndpointT::sendAsync(
+          std::string_view(buffer, bytesRead),
+          [this, onSendComplete = std::move(onSendComplete)]() mutable
+              -> Expected { return sendFileChunk(std::move(onSendComplete)); });
+    }
+
+    // File complete
+    return onSendComplete();
+  }
+
+  Expected sendMultipartFiles(http::MultipartPayload mpPayload,
+                              CallableT onComplete) {
+    if (mpPayload.hasFileContent() == false) {
+      return BaseSocketEndpointT::sendAsync(
+          mpPayload.getTailBoundary(),
+          [this, onComplete]() { return onComplete(); });
+    }
+    return BaseSocketEndpointT::sendAsync(
+        mpPayload.getActiveFileBoundaryHeader(),
+        [this, mpPayload = std::move(mpPayload), onComplete]() {
+          auto expectedPath = mpPayload.getActiveFile();
+          return sendFileContent(expectedPath.value(),
+                                 [this, mpPayload = std::move(mpPayload),
+                                  onComplete]() mutable -> Expected {
+                                   mpPayload.removeActiveFile();
+                                   return sendMultipartFiles(
+                                       std::move(mpPayload), onComplete);
+                                 });
+        });
+  }
+
+  Expected dispatchPayload(auto epollTime) {
+    if (_serverSide) {
+      _state = HttpEndpointState::AwaitingClientRequest;
     } else {
-      std::copy(content.begin(), content.end(), std::back_inserter(payload));
+      _state = HttpEndpointState::AwaitingUserRequest;
     }
-
-    _pendingResponse = true;
-    return BaseSocketEndpointT::send(payload);
+    return _payLoadHandler(_activeHeaders, _httpBody, epollTime);
   }
 
-  Expected dispatchPayloadAndCheckQueue(auto epollTime) {
-
-    if (auto result = _payLoadHandler(_activeHeaders, _httpBody, _responseCode,
-                                      epollTime);
-        !result) {
-      return result;
-    }
-
-    if (!_sendQueue.empty()) {
-      auto entry = _sendQueue.front();
-      _sendQueue.pop_front();
-      _pendingResponse = true;
-      return sendQueuedHttpData();
-    }
-    _pendingResponse = false;
-    return {};
-  }
-
-  Expected loadBody(std::spanstream &payloadStream, TimePoint epollTime) {
+  Expected readContent(std::spanstream &payloadStream, TimePoint epollTime) {
     auto positionInBuff = payloadStream.tellg();
     auto remainingSize = _activePayload.size() - positionInBuff;
     if ((_httpBody.size() + remainingSize) <= (*_contentSize)) {
@@ -277,23 +417,18 @@ private:
     }
 
     if (_httpBody.size() >= (*_contentSize)) {
-      return dispatchPayloadAndCheckQueue(epollTime);
+      return dispatchPayload(epollTime);
     }
     return {};
   }
 
-  Expected loadChunks(std::spanstream &payloadStream, TimePoint epollTime) {
-
+  Expected readChunks(std::spanstream &payloadStream, TimePoint epollTime) {
     while (!payloadStream.eof()) {
       if (!_chunkSize) {
-        auto posB4Line = payloadStream.tellg();
         auto expectedLine = getline_expected(payloadStream);
         if (!expectedLine) {
-          _partialChunkLength = expectedLine.error();
-          if (trim(_partialChunkLength).empty()) {
-            _partialChunkLength.clear();
-          }
-          continue;
+          return this->prependPartialContent(expectedLine.error().c_str(),
+                                             expectedLine.error().size());
         }
         if (trim(expectedLine.value()).empty()) {
           continue;
@@ -309,7 +444,7 @@ private:
         _chunkedBody.clear();
         _chunkSize.reset();
         _chunkedResponse = false;
-        return dispatchPayloadAndCheckQueue(epollTime);
+        return dispatchPayload(epollTime);
       }
 
       auto positionInBuff = payloadStream.tellg();
@@ -342,7 +477,7 @@ private:
                : str.substr(first, last - first + 1);
   }
 
-  Expected loadHeaders(std::spanstream &payloadStream, TimePoint epollTime) {
+  Expected readHeaders(std::spanstream &payloadStream, TimePoint epollTime) {
     ParseExpected result;
     _httpBody.clear();
 
@@ -390,92 +525,87 @@ private:
                           contentLenStr.data() + contentLenStr.size(),
                           contentSize);
           _contentSize = contentSize;
-          return loadBody(payloadStream, epollTime);
+          return readContent(payloadStream, epollTime);
         } else if (_activeHeaders.HasField("Transfer-Encoding") &&
                    _activeHeaders.getField("Transfer-Encoding").value() ==
                        "chunked") {
           // Handle chunked transfer encoding
           _chunkedResponse = true;
-          return loadChunks(payloadStream, epollTime);
+          _state = HttpEndpointState::ReadingChunks;
+          return readChunks(payloadStream, epollTime);
         }
         // There's no content body so close the response
         // dispatch the headers
-        _inResponse = false;
-        return dispatchPayloadAndCheckQueue(epollTime);
+        return dispatchPayload(epollTime);
       }
     }
 
     // We read a partial header line because the buffer
     // read didn't contain all the expected content
-    _partialHeaderLine = result.error();
-    return {};
+    return this->prependPartialContent(result.error().c_str(),
+                                       result.error().size());
   }
 
   Expected handleBaseSocketInboundPayload(std::string_view payload,
                                           TimePoint epollTime) {
-    if (_passThrough) {
-      // Used by upgraded connections to deliver raw payloads
-      return _payLoadHandler(_activeHeaders, payload, _responseCode, epollTime);
-    }
-    if (!_pendingResponse) {
-      return {}; // Ignore unexpected data ... some http servers are sending
-                 // unsolicited data.
-    }
-    if (_inResponse) {
-      if (!_partialHeaderLine.empty()) {
-        auto prependedPayload = _partialHeaderLine + std::string{payload};
-        _activePayload = prependedPayload;
-        auto payloadStream = std::spanstream{
-            std::span{prependedPayload.begin(), prependedPayload.end()}};
-        _partialHeaderLine.clear();
-        return loadHeaders(payloadStream, epollTime);
-      } else if (_chunkedResponse) {
-        if (!_partialChunkLength.empty()) {
-          // append the left over payload with the incoming
-          auto prependedPayload = _partialChunkLength + std::string{payload};
-          _activePayload = prependedPayload;
-          _partialChunkLength.clear();
-          auto payloadStream = std::spanstream{
-              std::span{prependedPayload.begin(), prependedPayload.end()}};
-          return loadChunks(payloadStream, epollTime);
-        } else {
-          _activePayload = payload;
-          auto payloadStream = std::spanstream{
-              std::span{const_cast<char *>(payload.data()),
-                        const_cast<char *>(payload.data()) + payload.size()}};
-          return loadChunks(payloadStream, epollTime);
-        }
-      }
-    }
+
     _activePayload = payload;
+
     auto payloadStream = std::spanstream{
         std::span{const_cast<char *>(payload.data()),
                   const_cast<char *>(payload.data()) + payload.size()}};
-    if (!_inResponse) {
-      _sendQueue.pop_front();
-      _activeHeaders.clear();
-      _contentSize.reset();
-      _compression.reset();
+
+    auto hasFullHeaderLine = [&]() {
+      return payload.find("\r\n") != std::string::npos;
+    };
+
+    switch (_state) {
+    case HttpEndpointState::WebsocketPassthrough:
+      return _payLoadHandler(_activeHeaders, payload, epollTime);
+    case HttpEndpointState::AwaitingUserRequest:
+      return {}; // Ignore unexpected data ... some http servers may send
+                 // unsolicited data.
+    case HttpEndpointState::AwaitingClientRequest: {
+      if (!hasFullHeaderLine()) {
+        this->prependPartialContent(payload.data(), payload.size());
+        return {};
+      }
+      std::string httpMethod;
+      std::string httpVersion;
+      payloadStream >> httpMethod >> _incomingURIPath >> httpVersion;
+      if (httpMethod.empty() || httpVersion.empty()) {
+        return this->closeEndpoint(
+            "Invalid HTTP request line: Missing action method and/or version");
+      }
+      auto actionResult = http::to_HTTPAction(httpMethod);
+      if (!actionResult) {
+        return this->closeEndpoint(std::format(
+            "Invalid HTTP request line: Unsupported action method '{}'",
+            httpMethod));
+      }
+      _incomingAction = actionResult.value();
+      return readHeaders(payloadStream, epollTime);
+    }
+    case HttpEndpointState::AwaitingResponse: {
+      if (!hasFullHeaderLine()) {
+        return this->prependPartialContent(payload.data(), payload.size());
+      }
       std::string httpVersion;
       std::string responsePhrase;
+      _activePayload = payload;
       payloadStream >> httpVersion >> _responseCode;
       std::getline(payloadStream, responsePhrase);
-      _inResponse = true;
       // Start reading headers
-      return loadHeaders(payloadStream, epollTime);
+      return readHeaders(payloadStream, epollTime);
     }
-
-    if (!_contentSize) {
-      return std::unexpected(
-          "Size information not available for current payload");
-    }
-
-    if (_chunkedResponse) {
-      // Handle chunked transfer encoding
-      return loadChunks(payloadStream, epollTime);
-    }
-
-    return loadBody(payloadStream, epollTime);
+    case HttpEndpointState::ReadingHeaders:
+      return readHeaders(payloadStream, epollTime);
+    case HttpEndpointState::ReadingChunks:
+      return readChunks(payloadStream, epollTime);
+    case HttpEndpointState::ReadingContent:
+      return readContent(payloadStream, epollTime);
+    };
+    return {};
   }
 
   ParseExpected getline_expected(std::spanstream &payloadStream) {
@@ -504,51 +634,71 @@ private:
 
 protected:
   void setPassThrough(bool passThroughState) {
-    _passThrough = passThroughState;
+    if (passThroughState)
+      _state = HttpEndpointState::WebsocketPassthrough;
+    else if (_serverSide) {
+      _state = HttpEndpointState::AwaitingClientRequest;
+    } else {
+      _state = HttpEndpointState::AwaitingUserRequest;
+    }
   }
 
-  Expected onDisconnected(const std::string &reason) override {
+  Expected onDisconnected(
+      const std::string &reason,
+      const medici::sockets::IPEndpointConfig &endpointConfig) override {
     resetHttpSocketState();
-    return BaseSocketEndpointT::onDisconnected(reason);
+    return BaseSocketEndpointT::onDisconnected(reason, endpointConfig);
   }
 
   void resetHttpSocketState() {
     _contentSize.reset();
     _compression.reset();
     _httpBody.clear();
-    _partialChunkLength.clear();
     _activePayload = {};
-    _partialHeaderLine.clear();
-    _inResponse = false;
-    _passThrough = false;
     _sendQueue.clear();
-    _pendingResponse = false;
     _chunkedResponse = false;
     _responseCode = 0;
     _chunkSize.reset();
+    _responsePayloadOptions.reset();
+    _activeHeaders.clear();
+    _queryString.clear();
+    if (_serverSide) {
+      _state = HttpEndpointState::AwaitingClientRequest;
+    } else {
+      _state = HttpEndpointState::AwaitingUserRequest;
+    }
   }
 
+  auto &getCompressedDataBuffer() { return _compressedData; }
+
+  // Server side only
+  auto getIncomingAction() const { return _incomingAction; }
+
+  // Client side only
+  auto getResponseCode() const { return _responseCode; }
+
+  auto& getRequestURIPath() const { return _incomingURIPath; }
+
+  std::unique_ptr<std::ifstream> _activeFileStream{};
   HttpSendQueue _sendQueue{};
   std::string _uriPath;
+  std::string _incomingURIPath;
+  std::string _queryString;
   IncomingPayloadHandlerT _payLoadHandler;
-  HttpPayloadHandlerT _outgoingPayloadHandler;
   http::HttpFields _activeHeaders{};
   std::optional<size_t> _contentSize{};
   std::optional<size_t> _chunkSize{};
   bool _chunkedResponse{false};
   std::string _httpBody{};
-  std::string _partialChunkLength{};
   std::string _chunkedBody{};
-  std::string _partialHeaderLine{};
   std::string_view _activePayload{};
   std::optional<http::SupportedCompression> _compression;
   std::vector<uint8_t> _compressedData;
 
-  HttpResponsePayloadOptions _responsePayloadOptions{};
-
-  bool _inResponse{false};
-  bool _passThrough{false};
-  bool _pendingResponse{false};
+  std::optional<HttpResponsePayloadOptions> _responsePayloadOptions{};
   int _responseCode{0};
+  HttpEndpointState _state{};
+  http::HTTPAction _incomingAction{};
+  bool _serverSide{false};
 };
 } // namespace medici::sockets::live

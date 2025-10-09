@@ -15,6 +15,17 @@
 
 namespace medici::application {
 
+struct IPAppRunContextConfig : AppRunContextConfig {
+
+  auto certFile() const { return _certFile; }
+  auto keyFile() const { return _keyFile; }
+  auto keyPassword() const { return _keyPassword; }
+
+  std::string _certFile;
+  std::string _keyFile;
+  std::string _keyPassword;
+};
+
 template <sockets::SocketFactoryC SocketFactoryT, ClockNowC ClockNowT,
           EndpointEventPollMgrC EndpointEventPollMgrT,
           std::uint32_t MaxProducerQueueSize = 2048>
@@ -23,19 +34,22 @@ public:
   using EventQueueT = event_queue::EventQueue<EndpointEventPollMgrT, ClockNowT,
                                               MaxProducerQueueSize>;
   using TimerFactoryT = timers::TimerFactory<EventQueueT>;
+  template <typename... Args>
   IPAppRunContext(const std::string &sessionName,
                   std::uint32_t maxProducerThreads,
                   std::chrono::microseconds inActivitySleepDuration,
-                  ClockNowT clock)
-      : _clock{clock}, _endpointPollManager{sessionName, _clock},
+                  ClockNowT clock, Args &&...args)
+      : _clock{clock}, _endpointPollManager{sessionName, _clock, _eventQueue,
+                                            std::forward<Args>(args)...},
         _socketFactory{_endpointPollManager},
         _eventQueue{sessionName, _endpointPollManager, _clock,
                     maxProducerThreads, inActivitySleepDuration},
         _timerFactory{_eventQueue} {}
 
-  IPAppRunContext(const AppRunContextConfig &config, ClockNowT clock)
-      : IPAppRunContext{config.name(), config.producers(),
-                        config.inactivityMicros(), _clock} {}
+  IPAppRunContext(const IPAppRunContextConfig &config, ClockNowT clock)
+      : IPAppRunContext{
+            config.name(), config.producers(), config.inactivityMicros(),
+            _clock,        config.certFile(),  config.keyFile()} {}
 
   auto &getSocketFactory() { return _socketFactory; }
 
@@ -46,7 +60,9 @@ public:
   auto &getEndpointPollManager() { return _endpointPollManager; }
 
   Expected start() override {
-    _endpointPollManager.initialize();
+    if (auto result = _endpointPollManager.initialize(); !result) {
+      return result;
+    }
     return _eventQueue.start();
   }
 
@@ -59,6 +75,8 @@ public:
   SocketFactoryT _socketFactory;
   EventQueueT _eventQueue;
   TimerFactoryT _timerFactory;
+  std::string _certFile;
+  std::string _keyFile;
 };
 
 } // namespace medici::application

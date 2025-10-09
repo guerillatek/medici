@@ -1,8 +1,6 @@
 #pragma once
 
-#include "medici/sockets/IPEndpointHandlerCapture.hpp"
-#include "medici/sockets/live/IPEndpointConnectionManager.hpp"
-#include "medici/sockets/live/IPEndpointPollManager.hpp"
+#include "medici/sockets/live/EndpointBase.hpp"
 
 #include <functional>
 #include <memory>
@@ -11,20 +9,26 @@
 
 namespace medici::sockets::live {
 
-template <SocketPayloadHandlerC IncomingPayloadHandlerT>
-class SSLLiveEndpoint : public ITcpIpEndpoint, public IIPEndpointDispatch {
+enum class SSLState {
+  Disconnected,
+  ConnectingToRemote,
+  RemoteClientConnecting,
+  Connected,
+};
 
-  using SocketEventHandlers = IPEndpointHandlerCapture<SocketPayloadHandlerT>;
+template <SocketPayloadHandlerC IncomingPayloadHandlerT>
+class SSLLiveEndpoint : public ITcpIpEndpoint,
+                        protected EndpointBase<IncomingPayloadHandlerT> {
+  using EndpointBaseT = EndpointBase<IncomingPayloadHandlerT>;
 
 public:
-  static constexpr bool usingCipher() { return true; }
-
   ~SSLLiveEndpoint() {
     if (!_sslSocket) {
       return;
     }
     closeRemoteConnection();
   }
+
   SSLLiveEndpoint(const IPEndpointConfig &config,
                   IIPEndpointPollManager &endpointPollManager,
                   IncomingPayloadHandlerT &&incomingPayloadHandler,
@@ -32,17 +36,16 @@ public:
                   CloseHandlerT closeHandler,
                   DisconnectedHandlerT disconnectedHandler,
                   OnActiveHandlerT onActiveHandler)
-      : IIPEndpointDispatch{config},
-        _eventHandlers{
-            config,
-            std::forward<IncomingPayloadHandlerT>(incomingPayloadHandler),
-            outgoingPayloadHandler,
-            closeHandler,
-            disconnectedHandler,
-            onActiveHandler},
-        _connectionManager{endpointPollManager, *this, ConnectionType::SSL} {
-    _inboundBuffer.resize(config.inBufferKB() * 1024);
-  }
+      : EndpointBaseT{ConnectionType::SSL,
+                      config,
+                      endpointPollManager,
+                      std::forward<IncomingPayloadHandlerT>(
+                          incomingPayloadHandler),
+                      outgoingPayloadHandler,
+                      closeHandler,
+                      disconnectedHandler,
+                      onActiveHandler},
+        _sslState{SSLState::Disconnected} {}
 
   SSLLiveEndpoint(int fd, const IPEndpointConfig &config,
                   IIPEndpointPollManager &endpointPollManager,
@@ -51,35 +54,85 @@ public:
                   CloseHandlerT closeHandler,
                   DisconnectedHandlerT disconnectedHandler,
                   OnActiveHandlerT onActiveHandler)
-      : IIPEndpointDispatch{config},
-        _eventHandlers{
-            config,
-            std::forward<IncomingPayloadHandlerT>(incomingPayloadHandler),
-            outgoingPayloadHandler,
-            closeHandler,
-            disconnectedHandler,
-            onActiveHandler},
-        _connectionManager{fd, endpointPollManager, *this, ConnectionType::SSL},
-        _clientHandshakePending{true} {
-    auto sslContextResult = _connectionManager.getSSLContext();
+      : EndpointBaseT{fd,
+                      ConnectionType::SSL,
+                      config,
+                      endpointPollManager,
+                      std::forward<IncomingPayloadHandlerT>(
+                          incomingPayloadHandler),
+                      outgoingPayloadHandler,
+                      closeHandler,
+                      disconnectedHandler,
+                      onActiveHandler},
+        _sslState{SSLState::RemoteClientConnecting} {
+    auto sslContextResult = this->getConnectionManager().getSSLServerContext();
     if (!sslContextResult) {
       throw std::runtime_error(sslContextResult.error());
     }
+
     _sslSocket = SSL_SocketPtr{SSL_new(sslContextResult.value()),
                                [](auto *ptr) { SSL_free(ptr); }};
     SSL_set_tlsext_host_name(_sslSocket.get(),
-                             IIPEndpointDispatch::getConfig().host().c_str());
+                             this->getConfig().host().c_str());
     if (SSL_set_fd(_sslSocket.get(), fd) != 1) {
       throw std::runtime_error(
-          std::format("SSL context failed to set file decscriptor, name={}",
-                      IIPEndpointDispatch::getConfig().name()));
+          std::format("SSL context failed to set file descriptor, name={}",
+                      this->getConfig().name()));
     }
-    _connectionManager.registerWithEpoll(fd);
+    if (auto result = this->getConnectionManager().registerWithEpoll();
+        !result) {
+      throw std::runtime_error(result.error());
+    }
+    SSL_set_accept_state(_sslSocket.get());
+    auto result = this->getConnectionManager().getEventQueue().postAsyncAction(
+        [this]() { return HandleSSLHandshake(); });
+    if (!result) {
+      throw std::runtime_error(result.error());
+    }
+    _sslState = SSLState::RemoteClientConnecting;
   }
 
   // ITcpIpEndpoint
-  const std::string &name() const {
-    return IIPEndpointDispatch::getConfig().name();
+  const std::string &name() const { return this->getConfig().name(); }
+
+  event_queue::AsyncExpected HandleSSLHandshake() {
+    if (int ret = SSL_do_handshake(_sslSocket.get()); ret != 1) [[unlikely]] {
+      int sslError = SSL_get_error(_sslSocket.get(), ret);
+      if (sslError == SSL_ERROR_WANT_READ || sslError == SSL_ERROR_WANT_WRITE) {
+        return {};
+      }
+      std::string activeTask;
+      switch (_sslState) {
+      case SSLState::ConnectingToRemote:
+        activeTask = "connecting to remote server";
+        break;
+      case SSLState::RemoteClientConnecting:
+        activeTask = "accepting incoming client connection";
+        break;
+      default:
+        break;
+      };
+      this->getConnectionManager().close();
+      _sslState = SSLState::Disconnected;
+      auto sslErrReason = ERR_reason_error_string(ERR_get_error());
+      std::string failReason;
+      if (sslErrReason) {
+        failReason = sslErrReason;
+      }
+      std::string failStatement =
+          std::format("SSL handshake failed {} for endpoint, name={}, "
+                      "error={}",
+                      activeTask, this->getConfig().name(),
+                      (!failReason.empty() ? failReason : "unknown"));
+      _sslSocket.reset();
+      return std::unexpected(failStatement);
+    }
+    _sslState = SSLState::Connected;
+    this->getConnectionManager().registerWithEpoll();
+    if (auto result = this->getEventHandlers().onActive(); !result) {
+      return std::unexpected(result.error());
+    }
+    return true;
   }
 
   Expected openEndpoint() override {
@@ -88,57 +141,29 @@ public:
           std::format("Endpoint {} is already open", name()));
     }
 
-    auto sslContextResult = _connectionManager.getSSLContext();
+    auto sslContextResult = this->getConnectionManager().getSSLCLientContext();
     if (!sslContextResult) {
       return std::unexpected(sslContextResult.error());
     }
 
-    if (auto result = _connectionManager.open(); !result) {
+    if (auto result = this->getConnectionManager().open(); !result) {
       return result;
     }
     _sslSocket = SSL_SocketPtr{SSL_new(sslContextResult.value()),
                                [](auto *ptr) { SSL_free(ptr); }};
     SSL_set_tlsext_host_name(_sslSocket.get(),
-                             IIPEndpointDispatch::getConfig().host().c_str());
-    if (SSL_set_fd(_sslSocket.get(), _connectionManager.getSocketHandle()) !=
-        1) {
-      _connectionManager.close();
+                             this->getConfig().host().c_str());
+    if (SSL_set_fd(_sslSocket.get(),
+                   this->getConnectionManager().getSocketHandle()) != 1) {
+      this->getConnectionManager().close();
       return std::unexpected(
           std::format("SSL context failed to set file decscriptor, name={}",
-                      IIPEndpointDispatch::getConfig().name()));
+                      this->getConfig().name()));
     }
-
-    while (true) {
-      auto rc = SSL_connect(_sslSocket.get());
-      if (rc == 1) {
-        break;
-      }
-      if (rc <= 0) {
-        if (errno == EAGAIN)
-          continue;
-        std::string errorMessage;
-        const auto ssl_rc = SSL_get_error(_sslSocket.get(), rc);
-        if (ssl_rc == SSL_ERROR_SSL) {
-          char msg[1024];
-          ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
-          errorMessage = msg;
-        } else {
-          errorMessage = strerror(errno);
-        }
-        return std::unexpected(
-            std::format("SSL_connect handshake failed on endpoint, name={}, "
-                        "host={}, port={}, msg={}",
-                        IIPEndpointDispatch::getConfig().name(),
-                        IIPEndpointDispatch::getConfig().host(),
-                        IIPEndpointDispatch::getConfig().port(), errorMessage));
-      }
-    }
-    _sslConnected = true;
-    if (auto result = _connectionManager.registerWithEpoll(); !result) {
-      return result;
-    }
-
-    return this->onActive();
+    SSL_set_connect_state(_sslSocket.get());
+    _sslState = SSLState::ConnectingToRemote;
+    return this->getConnectionManager().getEventQueue().postAsyncAction(
+        [this]() { return HandleSSLHandshake(); });
   }
 
   Expected closeEndpoint(const std::string &reason) override {
@@ -146,32 +171,25 @@ public:
     if (!_sslSocket || !isActive()) {
       return std::unexpected(std::format(
           "Failed to close ssl endpoint name={} reason='Not currently open'",
-          IIPEndpointDispatch::getConfig().name()));
+          this->getConfig().name()));
     }
 
-    if (auto result = _eventHandlers.onCloseEndpoint(reason); !result) {
+    if (auto result =
+            this->getEventHandlers().onCloseEndpoint(reason, this->getConfig());
+        !result) {
       return result;
     }
     return closeRemoteConnection();
   }
 
-  IIPEndpointDispatch &getDispatchInterface() override { return *this; }
-
-  bool isActive() const { return _sslConnected; }
-
-  // IIPEndpointDispatch
-  Expected registerTimer(const timers::IEndPointTimerPtr &timer) override {
-    _eventHandlers.registerTimer(timer);
-    return {};
-  }
-
-  Expected onActive() { return _eventHandlers.onActive(); }
+  bool isActive() const { return _sslState == SSLState::Connected; }
+  // IEndpointDispatch
 
   Expected resetConnection() {
     SSL_shutdown(_sslSocket.get());
     _sslSocket.reset();
     _sslConnected = false;
-    return _connectionManager.setClosed();
+    return this->getConnectionManager().setClosed();
   }
 
   Expected send(std::string_view payload) {
@@ -179,12 +197,11 @@ public:
       return std::unexpected(
           std::format("Failed send payload {} on inactive endpoint, name={}, "
                       "host={}, port={}",
-                      payload, IIPEndpointDispatch::getConfig().name(),
-                      IIPEndpointDispatch::getConfig().host(),
-                      IIPEndpointDispatch::getConfig().port()));
+                      payload, this->getConfig().name(),
+                      this->getConfig().host(), this->getConfig().port()));
     }
-    if (auto result = _eventHandlers.onPayloadSend(
-            payload, _connectionManager.getClock()());
+    if (auto result = this->getEventHandlers().onPayloadSend(
+            payload, this->getConnectionManager().getClock()());
         !result) {
       return result;
     }
@@ -192,9 +209,10 @@ public:
     while (true) {
       auto bytesWritten = SSL_write(_sslSocket.get(), payload.data() + offset,
                                     std::size(payload) - offset);
-      if (bytesWritten < 0) [[unlikely]] {
+      if (bytesWritten == 0) [[unlikely]] {
         return onDisconnected("No bytes written on ssl read ... server likely "
-                              "dropped connection");
+                              "dropped connection",
+                              this->getConfig());
       }
       offset += bytesWritten;
       if (offset < std::size(payload))
@@ -204,48 +222,86 @@ public:
     return {};
   }
 
-  Expected onPayloadReady(TimePoint readTime) override {
-    return onPayloadReady(readTime, _inboundBuffer);
+  Expected sendAsync(std::string_view buffer, CallableT &&finishCB) {
+    if (!this->getOutboundBuffer().empty()) {
+      return std::unexpected(
+          std::format("Endpoint name={} already has an async send in progress",
+                      this->getConfig().name()));
+    }
+    std::copy(buffer.begin(), buffer.end(),
+              std::back_inserter(this->getOutboundBuffer()));
+
+    if (auto result = this->getEventHandlers().onPayloadSend(
+            buffer, this->getConnectionManager().getClock()());
+        !result) {
+      return std::unexpected{result.error()};
+    }
+
+    return this->getConnectionManager().getEventQueue().postAsyncAction(
+        [this, finishCB]() -> AsyncExpected {
+          auto sendResult = sendAsyncCont();
+          if (!sendResult) {
+            return std::unexpected(sendResult.error());
+          }
+          if (sendResult.value()) {
+            if (finishCB) {
+              auto result = finishCB();
+              if (!result) {
+                return std::unexpected(result.error());
+              }
+            }
+            return true;
+          }
+          return false;
+        });
   }
 
-  Expected onPayloadReady(TimePoint readTime, auto &inboundBuffer) {
-    if (_clientHandshakePending) [[unlikely]] {
-      if (int ret = SSL_do_handshake(_sslSocket.get()); ret != 1) [[unlikely]] {
-        if (ret < 0) {
-          int sslError = SSL_get_error(_sslSocket.get(), ret);
-          if (sslError == SSL_ERROR_WANT_READ ||
-              sslError == SSL_ERROR_WANT_WRITE) {
-            return {};
-          }
-          _connectionManager.close();
-          _sslSocket.reset();
-          _sslConnected = false;
-          return onDisconnected(
-              std::format("SSL handshake failed for endpoint, name={}, "
-                          "error={}",
-                          IIPEndpointDispatch::getConfig().name(),
-                          ERR_reason_error_string(ERR_get_error())));
-        }
-      }
-      _clientHandshakePending = false;
-      return onActive();
+  AsyncExpected sendAsyncCont() {
+    if (this->getOutboundBuffer().empty()) {
+      return std::unexpected(
+          std::format("Endpoint name={} has no async send in progress",
+                      this->getConfig().name()));
     }
-    size_t bytesRead = 0;
-    size_t bufferSize = inboundBuffer.size();
 
-    const auto rc = SSL_read_ex(_sslSocket.get(), inboundBuffer.data(),
-                                bufferSize, &bytesRead);
+    size_t bytesWritten = SSL_write(
+        _sslSocket.get(), this->getOutboundBuffer().data() + _asyncBytesSent,
+        this->getOutboundBuffer().size() - _asyncBytesSent);
+
+    if (bytesWritten < 0) {
+      auto result =
+          onDisconnected("No bytes written on ssl read ... server likely "
+                         "dropped connection",
+                         this->getConfig());
+      if (!result) {
+        return std::unexpected(result.error());
+      }
+      return true;
+    }
+
+    _asyncBytesSent += bytesWritten;
+    if (_asyncBytesSent == this->getOutboundBuffer().size()) {
+      this->clearOutboundBuffer();
+      _asyncBytesSent = 0;
+      return true;
+    }
+    return false;
+  }
+
+  Expected onPayloadReady(TimePoint readTime) override {
+
+    size_t bytesRead = 0;
+    const auto rc =
+        SSL_read_ex(_sslSocket.get(), this->getInboundBufferWritePos(),
+                    this->getInboundBufferAvailableSize(), &bytesRead);
     if (rc == 1) [[likely]] {
       if (bytesRead == 0) {
-        if (_sslConnected == false) {
-          return {};
-        }
         SSL_shutdown(_sslSocket.get());
-        _connectionManager.close();
+        this->getConnectionManager().close();
         _sslSocket.reset();
-        _sslConnected = false;
-        return onDisconnected(
-            "No bytes read on ssl read ... server likely dropped connection");
+        _sslState = SSLState::Disconnected;
+        return onDisconnected("No bytes read on ssl read ... remote connection "
+                              "dropped connection",
+                              this->getConfig());
       }
 
       // BIO *bio = BIO_new_fp(stdout, BIO_NOCLOSE);// Use stdout for output
@@ -256,8 +312,9 @@ public:
       //  BIO_free(bio);
       //  }
 
-      return _eventHandlers.onPayloadRead(
-          std::string_view{_inboundBuffer.data(), bytesRead}, readTime);
+      return this->getEventHandlers().onPayloadRead(
+          std::string_view{this->getInboundBufferWritePos(), bytesRead},
+          readTime);
     }
 
     std::string errorMessage;
@@ -289,80 +346,86 @@ public:
       return {};
     } break;
     };
-    _connectionManager.close();
+    this->getConnectionManager().close();
     _sslSocket.reset();
     _sslConnected = false;
     auto message = std::format(
         "SSL_read_ex failed on endpoint, name={}, host={}, port={}, msg={}",
-        IIPEndpointDispatch::getConfig().name(),
-        IIPEndpointDispatch::getConfig().host(),
-        IIPEndpointDispatch::getConfig().port(), errorMessage);
-    return onDisconnected(message);
+        this->getConfig().name(), this->getConfig().host(),
+        this->getConfig().port(), errorMessage);
+    return onDisconnected(message, this->getConfig());
   }
 
-  Expected onDisconnected(const std::string &reason) override {
+  Expected onDisconnected(
+      const std::string &reason,
+      const medici::sockets::IPEndpointConfig &endpointConfig) override {
     auto result = resetConnection();
     if (!result) {
       if (!result) {
         return std::unexpected(
             std::format("Failed to reset connection on endpoint, name={}, "
                         "reason={}",
-                        IIPEndpointDispatch::getConfig().name(), reason));
+                        this->getConfig().name(), reason));
       }
     }
 
-    return _eventHandlers.onDisconnected(reason);
+    return this->getEventHandlers().onDisconnected(reason, endpointConfig);
   }
 
   Expected onShutdown() {
-    return closeEndpoint(
-        std::format("Shutdown called, closing endpoint name={}",
-                    IIPEndpointDispatch::getConfig().name()));
+    return closeEndpoint(std::format(
+        "Shutdown called, closing endpoint name={}", this->getConfig().name()));
   }
 
   const medici::ClockNowT &getClock() const override {
-    return _connectionManager.getClock();
+    return this->getConnectionManager().getClock();
   }
 
-protected:
-  auto &getInboundBuffer() const { return _inboundBuffer; }
+  int getEndpointUniqueId() const override {
+    return this->getConnectionManager().getSocketHandle();
+  }
+  IEndpointEventDispatch &getDispatchInterface() override { return *this; }
 
+protected:
   Expected closeRemoteConnection() {
     if (!_sslSocket) {
       return std::unexpected(std::format(
           "Failed to close ssl endpoint name={} reason='Not currently open'",
-          IIPEndpointDispatch::getConfig().name()));
+          this->getConfig().name()));
     }
     _sslConnected = false;
 
-    while (true) {
-      int shutdownResult = SSL_shutdown(_sslSocket.get());
-      if ((shutdownResult == 0) && (errno == EAGAIN)) {
-        continue;
-      }
-      if (shutdownResult < 0) {
-        _sslSocket.reset();
-        _connectionManager.close();
-        const auto ssl_rc = SSL_get_error(_sslSocket.get(), shutdownResult);
-        if (ssl_rc == SSL_ERROR_SSL) {
-          char msg[1024];
-          ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
-          return std::unexpected(
-              std::format("SSL_shutdown failed on endpoint, name={}, msg={}",
-                          IIPEndpointDispatch::getConfig().name(), msg));
-        }
-      }
-    }
-    _sslSocket.reset();
-    return _connectionManager.close();
+    return this->getConnectionManager().getEventQueue().postAsyncAction(
+        [this]() -> event_queue::AsyncExpected {
+          int shutdownResult = SSL_shutdown(_sslSocket.get());
+          if ((shutdownResult == 0) && (errno == EAGAIN)) {
+            return false; // Keep trying
+          }
+          if (shutdownResult < 0) {
+            const auto ssl_rc = SSL_get_error(_sslSocket.get(), shutdownResult);
+            _sslSocket.reset();
+            if (ssl_rc == SSL_ERROR_SSL) {
+              char msg[1024];
+              ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+              return std::unexpected(std::format(
+                  "SSL_shutdown failed on endpoint, name={}, msg={}",
+                  this->getConfig().name(), msg));
+            }
+          }
+          _sslState = SSLState::Disconnected;
+          _sslSocket.reset();
+          if (auto result = this->getConnectionManager().close(); !result) {
+            return std::unexpected(result.error());
+          }
+          return true; // Done
+        });
   }
 
   bool _sslConnected{false};
+  SSLState _sslState{SSLState::Disconnected};
   using SSL_SocketPtr = std::unique_ptr<ssl_st, std::function<void(ssl_st *)>>;
   SSL_SocketPtr _sslSocket;
-  std::vector<char> _inboundBuffer{};
-  SocketEventHandlers _eventHandlers;
-  IPEndpointConnectionManager _connectionManager;
   bool _clientHandshakePending{false};
+  size_t _asyncBytesSent{0};
 };
 } // namespace medici::sockets::live

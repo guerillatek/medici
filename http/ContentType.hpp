@@ -42,12 +42,12 @@ enum class SupportedCompression : std::uint8_t {
   // Note: HttpDeflate is the zlib format (RFC 1950) which
   // includes zlib headers and trailers.
   HttpDeflate = 2, // RFC 1950
-  WSDeflate = 3,   // RFC 7692 - WebSocket DEFLATE
+  WSDeflate = 4,   // RFC 7692 - WebSocket DEFLATE
   // Brotli is a newer compression format that is not part of the original
   // HTTP/1.1 or HTTP/2 specifications, but is widely used in modern
   // web applications for its efficiency.
   // It is defined in RFC 7932.
-  Brotli = 4 // RFC 7932
+  Brotli = 8 // RFC 7932
 };
 
 const char *to_string(SupportedCompression compression);

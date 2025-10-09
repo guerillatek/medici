@@ -12,11 +12,13 @@ enum class ConnectionType { TCP, SSL, UDP, MCAST };
 
 class IPEndpointConnectionManager {
 public:
-  IPEndpointConnectionManager(IIPEndpointPollManager &, IIPEndpointDispatch &,
-                              ConnectionType);
+  IPEndpointConnectionManager(const IPEndpointConfig &,
+                              IIPEndpointPollManager &,
+                              IEndpointEventDispatch &, ConnectionType);
 
-  IPEndpointConnectionManager(int fd, IIPEndpointPollManager &,
-                              IIPEndpointDispatch &, ConnectionType,
+  IPEndpointConnectionManager(const IPEndpointConfig &, int fd,
+                              IIPEndpointPollManager &,
+                              IEndpointEventDispatch &, ConnectionType,
                               std::function<Expected()> onActive = {});
   // used by client endpoints
   Expected open();
@@ -25,33 +27,52 @@ public:
   Expected openListener();
 
   Expected send(std::string_view);
+  ExpectedSize sendAsync(std::string_view);
+
   Expected setClosed();
   Expected close();
   bool isConnected() const { return _fd != 0; }
 
   auto getSocketHandle() const { return _fd; }
 
+  auto &getConfig() const { return _config; }
   auto &getClock() const { return _endPointPollManager.getClock(); }
 
-  auto getSSLContext() { return _endPointPollManager.getSSLContext(); }
+  auto &getEventQueue() { return _endPointPollManager.getEventQueue(); }
+
+  auto getSSLCLientContext() {
+    return _endPointPollManager.getSSLClientContext();
+  }
+  auto getSSLServerContext() {
+    return _endPointPollManager.getSSLServerContext();
+  }
 
   Expected registerWithEpoll() {
     ++_fdRegistrations;
-    return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch);
+    return _endPointPollManager.registerEndpoint(_fd, _endPointDispatch,
+                                                 _config);
   }
 
   Expected registerWithEpoll(int fd) {
     _fd = fd;
     ++_fdRegistrations;
-    return _endPointPollManager.listenerRegisterEndpoint(_fd,
-                                                         _endPointDispatch);
+    return _endPointPollManager.listenerRegisterEndpoint(_fd, _endPointDispatch,
+                                                         _config);
   }
 
   auto fdRegistrations() const { return _fdRegistrations; }
 
+  ~IPEndpointConnectionManager() {
+    if (_fd) {
+      _endPointPollManager.removeEndpoint(_fd, _endPointDispatch, _config);
+      ::close(_fd);
+    }
+  }
+
 private:
+  IPEndpointConfig _config;
   IIPEndpointPollManager &_endPointPollManager;
-  IIPEndpointDispatch &_endPointDispatch;
+  IEndpointEventDispatch &_endPointDispatch;
   ConnectionType _connectionType;
   int _fd;
   int _fdRegistrations{0};

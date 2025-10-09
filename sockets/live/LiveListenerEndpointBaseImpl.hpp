@@ -2,21 +2,22 @@
 
 #include "medici/sockets/IPEndpointHandlerCapture.hpp"
 #include "medici/sockets/interfaces.hpp"
+#include "medici/sockets/live/EndpointBase.hpp"
 #include "medici/sockets/live/IPEndpointConnectionManager.hpp"
 #include "medici/sockets/live/IPEndpointPollManager.hpp"
-
 namespace medici::sockets::live {
 
-class LiveListenerEndpointBaseImpl : public IIPEndpoint,
-                                     public IIPEndpointDispatch {
+class LiveListenerEndpointBaseImpl
+    : public IIPEndpoint,
+      public EndpointBase<SocketPayloadHandlerT> {
 
-  using SocketEventHandlers = IPEndpointHandlerCapture<SocketPayloadHandlerT>;
   using NewListenerEndpointHandlerT =
       std::function<Expected(int, const IPEndpointConfig &)>;
+  using EndpointBaseT = EndpointBase<SocketPayloadHandlerT>;
 
 public:
   virtual ~LiveListenerEndpointBaseImpl() {
-    if (!_connectionManager.isConnected()) {
+    if (!this->getConnectionManager().isConnected()) {
       return;
     }
     closeRemoteConnection();
@@ -28,21 +29,18 @@ public:
                                CloseHandlerT listenerCloseHandler,
                                DisconnectedHandlerT listenerDisconnectedHandler,
                                OnActiveHandlerT listenerOnActiveHandler)
-      : IIPEndpointDispatch{config}, _eventHandlers{config,
-                                                    SocketPayloadHandlerT{},
-                                                    SocketPayloadHandlerT{},
-                                                    listenerCloseHandler,
-                                                    listenerDisconnectedHandler,
-                                                    listenerOnActiveHandler},
-        _connectionManager{endpointPollManager, *this, ConnectionType::TCP},
-        _newListenerEndpointHandler{std::move(newEndpointHandler)} {}
+      : EndpointBaseT{ConnectionType::TCP,         config,
+                      endpointPollManager,         SocketPayloadHandlerT{},
+                      SocketPayloadHandlerT{},     listenerCloseHandler,
+                      listenerDisconnectedHandler, listenerOnActiveHandler},
+        _newListenerEndpointHandler{newEndpointHandler} {}
 
   const std::string &name() const override {
-    return IIPEndpointDispatch::getConfig().name();
+    return this->getConnectionManager().getConfig().name();
   }
 
   Expected openEndpoint() override {
-    if (auto result = _connectionManager.openListener(); !result) {
+    if (auto result = this->getConnectionManager().openListener(); !result) {
       return result;
     }
 
@@ -53,17 +51,21 @@ public:
     if (auto result = closeRemoteConnection(); !result) {
       return result;
     }
-    if (auto result = _eventHandlers.onCloseEndpoint(reason); !result) {
+    if (auto result = _eventHandlers.onCloseEndpoint(
+            reason, this->getConnectionManager().getConfig());
+        !result) {
       return result;
     }
-    return _connectionManager.close();
+    return this->getConnectionManager().close();
   }
 
-  bool isActive() const override { return _connectionManager.isConnected(); }
+  bool isActive() const override {
+    return this->getConnectionManager().isConnected();
+  }
 
-  IIPEndpointDispatch &getDispatchInterface() override { return *this; }
+  IEndpointEventDispatch &getDispatchInterface() override { return *this; }
 
-  // IIPEndpointDispatch
+  // IEndpointEventDispatch
   Expected registerTimer(const timers::IEndPointTimerPtr &timer) override {
     _eventHandlers.registerTimer(timer);
     return {};
@@ -76,55 +78,61 @@ public:
     sockaddr_in remoteAddress{};
     socklen_t addrLen = sizeof(remoteAddress);
     int clientFd =
-        accept(_connectionManager.getSocketHandle(),
+        accept(this->getConnectionManager().getSocketHandle(),
                reinterpret_cast<struct sockaddr *>(&remoteAddress), &addrLen);
     if (clientFd == -1) {
       return std::unexpected(std::format(
           "Failed to accept connection on listener endpoint, "
           "name={}, error={}",
-          IIPEndpointDispatch::getConfig().name(), strerror(errno)));
+          this->getConnectionManager().getConfig().name(), strerror(errno)));
     }
     char remoteIp[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &remoteAddress.sin_addr, remoteIp, sizeof(remoteIp));
     std::uint16_t remotePort = ntohs(remoteAddress.sin_port);
     IPEndpointConfig remoteConfig{
-        IIPEndpointDispatch::getConfig().name() + "_remote-" + remoteIp + ":" +
-            std::to_string(remotePort),
-        remoteIp, remotePort, IIPEndpointDispatch::getConfig().inBufferKB(),
-        IIPEndpointDispatch::getConfig().interface()};
+        this->getConnectionManager().getConfig().name() + "_remote-" +
+            remoteIp + ":" + std::to_string(remotePort),
+        remoteIp, remotePort,
+        this->getConnectionManager().getConfig().inBufferKB(),
+        this->getConnectionManager().getConfig().interface()};
     return _newListenerEndpointHandler(clientFd, remoteConfig);
   }
 
-  void resetConnection() { _connectionManager.close(); }
+  void resetConnection() { this->getConnectionManager().close(); }
 
-  Expected onDisconnected(const std::string &reason) override {
+  Expected onDisconnected(
+      const std::string &reason,
+      const medici::sockets::IPEndpointConfig &endpointConfig) override {
     resetConnection();
-    return _eventHandlers.onDisconnected(reason);
+    return _eventHandlers.onDisconnected(reason, endpointConfig);
   }
 
   Expected onShutdown() {
     return _eventHandlers.onCloseEndpoint(
         std::format("Shutdown called, closing endpoint name={}",
-                    IIPEndpointDispatch::getConfig().name()));
+                    this->getConnectionManager().getConfig().name()),
+        this->getConfig());
   }
 
   const medici::ClockNowT &getClock() const override {
-    return _connectionManager.getClock();
+    return this->getConnectionManager().getClock();
+  }
+
+  int getEndpointUniqueId() const override {
+    return this->getConnectionManager().getSocketHandle();
   }
 
 protected:
   Expected closeRemoteConnection() {
-    if (!_connectionManager.isConnected()) {
+    if (!this->getConnectionManager().isConnected()) {
       return std::unexpected(
           std::format("Failed to close listening endpoint name={} reason='Not "
                       "currently open'",
-                      IIPEndpointDispatch::getConfig().name()));
+                      this->getConnectionManager().getConfig().name()));
     }
     return {};
   }
 
-  SocketEventHandlers _eventHandlers;
-  IPEndpointConnectionManager _connectionManager;
   NewListenerEndpointHandlerT _newListenerEndpointHandler;
 };
 
