@@ -146,7 +146,7 @@ ExpectedValue FieldContentUtils::encodeFieldsToRequestHeader(
 ExpectedValue FieldContentUtils::encodeFieldsToResponseHeader(
     int responseCode, const std::string &message, const FieldValueMap &values) {
   std::ostringstream contentHeader;
-  contentHeader << std::format("HTTP/1.1 {} {}\r\n", responseCode, message);
+  contentHeader << std::format("HTTP/1.1 {} {}", responseCode, message);
   if (auto result = loadHeaderValues(contentHeader, values); !result) {
     return std::unexpected(result.error());
   }

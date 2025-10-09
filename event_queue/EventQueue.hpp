@@ -319,22 +319,16 @@ private:
                                     // overflow. Value should be unsigned(?)
 
     // Check for async operations on local queue
-    Expected eventResult;
     if (!_localEventQueue.empty()) {
       if (!_localEventQueue.front()) {
         return std::unexpected("Empty action placed on local async queue");
       }
-      auto result = eventResult = _localEventQueue.front()();
+      auto result = _localEventQueue.front()();
       _localEventQueue.pop_front();
       ++dispatchedEvents;
       if (!result) {
         return result;
       }
-    }
-
-    // FIXME : YO : impossible condition see ^^^
-    if (!eventResult) {
-      return eventResult;
     }
 
     // poll the external thread producers

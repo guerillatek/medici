@@ -65,7 +65,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
             [this](http::HTTPAction action, const std::string &requestURI,
                    const http::HttpFields &fields,
                    const sockets::HttpServerPayloadT &payload, TimePoint tp) {
-              return HandleIncomingPayloads(action, requestURI, fields, payload,
+              return HandleClientRequests(action, requestURI, fields, payload,
                                             tp);
             },
             [this](std::string_view payload, medici::TimePoint) {
@@ -83,7 +83,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
               return Expected{};
             }} {}
 
-  Expected HandleIncomingPayloads(http::HTTPAction action,
+  Expected HandleClientRequests(http::HTTPAction action,
                                   const std::string &requestURI,
                                   const http::HttpFields &,
                                   const sockets::HttpServerPayloadT &,
@@ -100,8 +100,20 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     return Expected{};
   }
 
-  Expected HandleServerResponse(const http::HttpFields &,
-                                std::string_view payload, int, TimePoint) {
+  Expected HandleServerResponse(const http::HttpFields &headers,
+                                std::string_view payload, int responseCode, TimePoint) {
+    if(headers.HasField("Custom-Header")){
+      auto headerValue = headers.getField("Custom-Header");
+      if(headerValue && headerValue.value() == "LargeContentTest"){
+        BOOST_CHECK(responseCode == 200);
+        BOOST_CHECK(payload == largeContent);
+    
+      } else {
+        BOOST_FAIL("Custom-Header value mismatch");
+      }
+    } else {
+      BOOST_FAIL("Custom-Header not found in response");
+    }
     return Expected{};
   }
 

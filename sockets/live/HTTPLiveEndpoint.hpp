@@ -313,17 +313,13 @@ protected:
           if constexpr (std::is_same_v<T, std::filesystem::path>) {
             return BaseSocketEndpointT::sendAsync(
                 payload, [this, targetContent]() {
-                  return sendFileContent(targetContent, [this]() {
-                    _sendQueue.pop_front();
-                    return sendQueuedHttpData();
-                  });
+                  return sendFileContent(targetContent,
+                                         [this]() { return onPayloadSent(); });
                 });
           } else if constexpr (std::is_same_v<T, std::string>) {
             payload += targetContent;
-            return BaseSocketEndpointT::sendAsync(payload, [this]() {
-              _sendQueue.pop_front();
-              return sendQueuedHttpData();
-            });
+            return BaseSocketEndpointT::sendAsync(
+                payload, [this]() { return onPayloadSent(); });
           } else if constexpr (std::is_same_v<T, http::MultipartPayload>) {
             auto partialPayload = targetContent.partialEncodeNonFileToString();
             if (!partialPayload) {
@@ -332,13 +328,11 @@ protected:
                               partialPayload.error()));
             }
             payload += partialPayload.value();
-            return BaseSocketEndpointT::sendAsync(
-                payload, [this, targetContent]() {
-                  return sendMultipartFiles(targetContent, [this]() {
-                    _sendQueue.pop_front();
-                    return sendQueuedHttpData();
-                  });
-                });
+            return BaseSocketEndpointT::sendAsync(payload, [this,
+                                                            targetContent]() {
+              return sendMultipartFiles(targetContent,
+                                        [this]() { return onPayloadSent(); });
+            });
           }
           return std::unexpected("Unsupported content type in send queue");
         },
@@ -401,6 +395,16 @@ protected:
       _state = HttpEndpointState::AwaitingUserRequest;
     }
     return _payLoadHandler(_activeHeaders, _httpBody, epollTime);
+  }
+
+  Expected onPayloadSent() {
+    if (_serverSide) {
+      _state = HttpEndpointState::AwaitingClientRequest;
+    } else {
+      _state = HttpEndpointState::AwaitingResponse;
+    }
+    _sendQueue.pop_front();
+    return sendQueuedHttpData();
   }
 
   Expected readContent(std::spanstream &payloadStream, TimePoint epollTime) {
@@ -499,7 +503,7 @@ protected:
         }
       } else if (trim(line).empty()) {
         // We've read an empty line so either the body is starting
-        // order this is the end of the content. Check the headers values
+        // or this is the end of the content. Check the headers values
         // to verify
 
         if (_activeHeaders.HasField("Content-Encoding")) {
@@ -525,6 +529,7 @@ protected:
                           contentLenStr.data() + contentLenStr.size(),
                           contentSize);
           _contentSize = contentSize;
+          _state = HttpEndpointState::ReadingContent;
           return readContent(payloadStream, epollTime);
         } else if (_activeHeaders.HasField("Transfer-Encoding") &&
                    _activeHeaders.getField("Transfer-Encoding").value() ==
@@ -677,7 +682,7 @@ protected:
   // Client side only
   auto getResponseCode() const { return _responseCode; }
 
-  auto& getRequestURIPath() const { return _incomingURIPath; }
+  auto &getRequestURIPath() const { return _incomingURIPath; }
 
   std::unique_ptr<std::ifstream> _activeFileStream{};
   HttpSendQueue _sendQueue{};
