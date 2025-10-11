@@ -64,4 +64,19 @@ const char *to_string(SupportedCompression compression) {
   };
   return "Invalid Compression Value"; // Fallback
 }
+
+const char *to_encoding_value(SupportedCompression compression) {
+  switch (compression) {
+  case SupportedCompression::GZip:
+    return "gzip";
+  case SupportedCompression::HttpDeflate:
+    return "deflate";
+  case SupportedCompression::Brotli:
+    return "br";
+  default:
+    break;
+  }
+  return ""; // No compression
+}
+
 } // namespace medici::http

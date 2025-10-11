@@ -124,33 +124,33 @@ Expected decompressBrotliStreaming(std::string_view compressed,
 
   std::vector<uint8_t> outputBuffer(8192);
 
-  while (input_size > 0) {
+  BrotliDecoderResult brotliResult = BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
+  while (brotliResult == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
     uint8_t *output = outputBuffer.data();
     size_t output_size = outputBuffer.size();
 
-    BrotliDecoderResult result = BrotliDecoderDecompressStream(
+    brotliResult = BrotliDecoderDecompressStream(
         state, &input_size, &input, &output_size, &output, nullptr);
 
-    size_t decoded = outputBuffer.size() - output_size;
-    if (decoded > 0) {
-      std::string_view chunk(reinterpret_cast<char *>(outputBuffer.data()),
-                             decoded);
-      auto handler_result = handler(chunk);
-      if (!handler_result) {
-        BrotliDecoderDestroyInstance(state);
-        return handler_result;
-      }
-    }
-
-    if (result == BROTLI_DECODER_RESULT_SUCCESS) {
-      break;
-    } else if (result == BROTLI_DECODER_RESULT_ERROR) {
+    switch (brotliResult) {
+    case BROTLI_DECODER_RESULT_ERROR:
       BrotliDecoderDestroyInstance(state);
       return std::unexpected("Brotli decompression error");
+    case BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT:
+    case BROTLI_DECODER_RESULT_SUCCESS: {
+      size_t decoded = outputBuffer.size() - output_size;
+      if (decoded > 0) {
+        std::string_view chunk(reinterpret_cast<char *>(outputBuffer.data()),
+                               decoded);
+        auto handler_result = handler(chunk);
+        if (!handler_result) {
+          BrotliDecoderDestroyInstance(state);
+          return handler_result;
+        }
+      }
     }
-    return {};
+    };
   }
-
   BrotliDecoderDestroyInstance(state);
   return Expected{}; // Indicate success
 }

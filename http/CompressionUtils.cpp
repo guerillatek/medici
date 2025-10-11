@@ -12,7 +12,7 @@ Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
   // RFC 7692 requires raw DEFLATE format (negative windowBits)
   // window_bits_ can be negotiated between 8-15
   int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
-                         -windowBits, // NEGATIVE for raw DEFLATE
+                         windowBits, // NEGATIVE for raw DEFLATE
                          8,           // Standard memory level
                          Z_DEFAULT_STRATEGY);
 

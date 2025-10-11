@@ -51,6 +51,8 @@ enum class SupportedCompression : std::uint8_t {
 };
 
 const char *to_string(SupportedCompression compression);
+const char *to_encoding_value(SupportedCompression compression);
+
 inline std::ostream &operator<<(std::ostream &os,
                                 SupportedCompression compression) {
   return os << to_string(compression);

@@ -238,10 +238,10 @@ IPEndpointPollManager::getSSLClientContextStatic() {
   return sslClientContext;
 }
 
-// This will only be called during construction of the IPEndpointPollManager.
-// While multiple poll managers can exist and run on multiple threads, because
-//  the absence of thread safety in this function they must all be constructed
-//  on a on the same thread. This is not an issue when using the
+//  This will only be called during construction of the IPEndpointPollManager.
+//  While multiple poll managers can exist and run on multiple threads, because
+//  of the absence of thread safety in this function they must all be constructed
+//  on the same thread. This is not an issue when using the
 //  AppRunConfigManager. However, in test environments and other special use
 //  cases where AppRunConfigManager is not used, care must be taken to ensure
 //  this restriction and that only one poll manager is configured with a

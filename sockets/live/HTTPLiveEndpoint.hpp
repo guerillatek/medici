@@ -41,8 +41,7 @@ struct HttpSendQueueEntry {
   QueueContentT content;
   http::SupportedCompression compression{http::SupportedCompression::None};
   std::string uriPath{};
-  std::string queryString{};
-  std::optional<HttpResponsePayloadOptions> responsePayloadOptions{};
+  HttpResponsePayloadOptions responsePayloadOptions{};
 };
 
 template <HttpPayloadHandlerC IncomingPayloadHandlerT,
@@ -115,7 +114,7 @@ public:
 
   Expected closeEndpoint(const std::string &reason) override {
     BaseSocketEndpointT::closeEndpoint(reason);
-    resetHttpSocketState();
+    resetIncomingHttpState();
     return {};
   }
 
@@ -197,7 +196,6 @@ protected:
     auto &compressionEncoding = activeQueueEntry.compression;
     auto action = activeQueueEntry.action;
     _uriPath = activeQueueEntry.uriPath;
-    _queryString = activeQueueEntry.queryString;
     _responsePayloadOptions = activeQueueEntry.responsePayloadOptions;
     _compressedData.clear();
 
@@ -212,6 +210,8 @@ protected:
       }
       headersValues.addFieldValue("Content-Length",
                                   std::to_string(_compressedData.size()));
+      headersValues.addFieldValue("Content-Encoding",
+                                  to_encoding_value(compressionEncoding));
       return {};
     };
 
@@ -246,6 +246,25 @@ protected:
                                           std::to_string(encodedForm.size()));
             }
 
+          } else if constexpr (std::is_same_v<T, http::MultipartPayload>) {
+            auto encodedMPartFormResult = targetContent.encodeToString();
+            if (!encodedMPartFormResult) {
+              return std::unexpected(
+                  std::format("Failed to encode multipart form content: "
+                              "error={}",
+                              encodedMPartFormResult.error()));
+            }
+            auto encodedForm = encodedMPartFormResult.value();
+            if (!encodedForm.empty()) {
+
+              content = encodedForm; // reassign as std::string
+              if (compressionEncoding != http::SupportedCompression::None) {
+                return compressStringContent(encodedForm);
+              }
+              headersValues.addFieldValue("Content-Length",
+                                          std::to_string(encodedForm.size()));
+            }
+
           } else if constexpr (std::is_same_v<T, std::filesystem::path>) {
 
             if (compressionEncoding != http::SupportedCompression::None) {
@@ -258,6 +277,8 @@ protected:
               }
               headersValues.addFieldValue(
                   "Content-Length", std::to_string(_compressedData.size()));
+              headersValues.addFieldValue(
+                  "Content-Encoding", to_encoding_value(compressionEncoding));
             } else {
               auto fileSize = std::filesystem::file_size(targetContent);
               if (fileSize > 0) {
@@ -301,10 +322,8 @@ protected:
     if (_compressedData.empty() == false) {
       std::copy(_compressedData.begin(), _compressedData.end(),
                 std::back_inserter(payload));
-      return BaseSocketEndpointT::sendAsync(payload, [this]() {
-        _sendQueue.pop_front();
-        return sendQueuedHttpData();
-      });
+      return BaseSocketEndpointT::sendAsync(
+          payload, [this]() { return onPayloadSent(); });
     }
 
     return std::visit(
@@ -389,11 +408,41 @@ protected:
   }
 
   Expected dispatchPayload(auto epollTime) {
+    http::SupportedCompression compression = http::SupportedCompression::None;
+
+    if (_activeHeaders.HasField("Content-Encoding")) {
+      auto encodingStr = _activeHeaders.getField("Content-Encoding").value();
+      if (encodingStr == to_encoding_value(http::SupportedCompression::GZip)) {
+        compression = http::SupportedCompression::GZip;
+      } else if (encodingStr ==
+                 to_encoding_value(http::SupportedCompression::HttpDeflate)) {
+        compression = http::SupportedCompression::HttpDeflate;
+      } else if (encodingStr ==
+                 to_encoding_value(http::SupportedCompression::Brotli)) {
+        compression = http::SupportedCompression::Brotli;
+      } else {
+        return std::unexpected(
+            std::format("Unsupported content encoding '{}'", encodingStr));
+      }
+    }
     if (_serverSide) {
       _state = HttpEndpointState::AwaitingClientRequest;
     } else {
       _state = HttpEndpointState::AwaitingUserRequest;
     }
+    if (compression != http::SupportedCompression::None) {
+      if (_serverSide || (_responsePayloadOptions.decompressBeforeDispatch)) {
+        auto decompressionResult = http::decompressPayloadToBuffer(
+            _httpBody, compression, _decompressedBody);
+        if (!decompressionResult) {
+          return std::unexpected(
+              std::format("Failed to decompress incoming payload: error={}",
+                          decompressionResult.error()));
+        }
+        return _payLoadHandler(_activeHeaders, _decompressedBody, epollTime);
+      }
+    }
+
     return _payLoadHandler(_activeHeaders, _httpBody, epollTime);
   }
 
@@ -404,7 +453,7 @@ protected:
       _state = HttpEndpointState::AwaitingResponse;
     }
     _sendQueue.pop_front();
-    return sendQueuedHttpData();
+    return {};
   }
 
   Expected readContent(std::spanstream &payloadStream, TimePoint epollTime) {
@@ -575,9 +624,12 @@ protected:
         this->prependPartialContent(payload.data(), payload.size());
         return {};
       }
+      resetIncomingHttpState();
+      _activePayload = payload;
       std::string httpMethod;
       std::string httpVersion;
-      payloadStream >> httpMethod >> _incomingURIPath >> httpVersion;
+      payloadStream >> httpMethod >> _incomingURIPath;
+      std::getline(payloadStream, httpVersion);
       if (httpMethod.empty() || httpVersion.empty()) {
         return this->closeEndpoint(
             "Invalid HTTP request line: Missing action method and/or version");
@@ -595,6 +647,7 @@ protected:
       if (!hasFullHeaderLine()) {
         return this->prependPartialContent(payload.data(), payload.size());
       }
+      resetIncomingHttpState();
       std::string httpVersion;
       std::string responsePhrase;
       _activePayload = payload;
@@ -651,27 +704,30 @@ protected:
   Expected onDisconnected(
       const std::string &reason,
       const medici::sockets::IPEndpointConfig &endpointConfig) override {
-    resetHttpSocketState();
+    resetIncomingHttpState();
     return BaseSocketEndpointT::onDisconnected(reason, endpointConfig);
   }
 
-  void resetHttpSocketState() {
+  void resetIncomingHttpState() {
     _contentSize.reset();
     _compression.reset();
     _httpBody.clear();
+    _decompressedBody.clear();
     _activePayload = {};
-    _sendQueue.clear();
     _chunkedResponse = false;
     _responseCode = 0;
     _chunkSize.reset();
-    _responsePayloadOptions.reset();
     _activeHeaders.clear();
-    _queryString.clear();
     if (_serverSide) {
       _state = HttpEndpointState::AwaitingClientRequest;
     } else {
       _state = HttpEndpointState::AwaitingUserRequest;
     }
+  }
+
+  void resetHttpState() {
+    resetIncomingHttpState();
+    _sendQueue.clear();
   }
 
   auto &getCompressedDataBuffer() { return _compressedData; }
@@ -688,19 +744,19 @@ protected:
   HttpSendQueue _sendQueue{};
   std::string _uriPath;
   std::string _incomingURIPath;
-  std::string _queryString;
   IncomingPayloadHandlerT _payLoadHandler;
   http::HttpFields _activeHeaders{};
   std::optional<size_t> _contentSize{};
   std::optional<size_t> _chunkSize{};
   bool _chunkedResponse{false};
   std::string _httpBody{};
+  std::string _decompressedBody{};
   std::string _chunkedBody{};
   std::string_view _activePayload{};
   std::optional<http::SupportedCompression> _compression;
   std::vector<uint8_t> _compressedData;
 
-  std::optional<HttpResponsePayloadOptions> _responsePayloadOptions{};
+  HttpResponsePayloadOptions _responsePayloadOptions{};
   int _responseCode{0};
   HttpEndpointState _state{};
   http::HTTPAction _incomingAction{};

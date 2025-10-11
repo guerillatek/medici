@@ -38,7 +38,6 @@ public:
                       ServiceRequestQueueSize>;
 
   AppRunContextManager(const AppRunContextConfigList &configList) {
-    LOG_OBJECT_INIT("AppContextMgr")
     for (const AppRunContextConfig &config : configList) {
       if (config.runContextType() == "IPEndpoints") {
         _contextByIndex.emplace_back(ContextWithRunParams{
@@ -60,7 +59,7 @@ public:
   }
 
   // Used by component manager to start run context
-  // with designate index
+  // with designated index
   void startRunContext(std::uint32_t index) {
     if (index >= _contextByIndex.size()) {
       return;
@@ -68,7 +67,6 @@ public:
 
     auto result = _contextByIndex[index].context->start();
     if (!result) {
-      LOG_ERROR(result.error());
       stopAllThreads();
       throw std::runtime_error(result.error());
     }
@@ -103,7 +101,6 @@ private:
   std::vector<ContextWithRunParams> _contextByIndex;
   std::map<std::string, std::shared_ptr<IAppContext>> _contextLookup;
   ClockNowT _clock{};
-  LOG_OBJECT_DECLARE();
 };
 
 } // namespace medici::application

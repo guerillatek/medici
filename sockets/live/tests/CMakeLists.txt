@@ -3,7 +3,7 @@
 
 add_executable(LiveSocketsTests 
     compileTests.cpp
-    clientServerTests.cpp
+    TCPClientServerTests.cpp
     writeStringToTempFile.cpp
     ServerClientTestHarness.cpp
     HttpServerClientTests.cpp

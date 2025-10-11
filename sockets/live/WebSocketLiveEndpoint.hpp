@@ -568,7 +568,7 @@ private:
     _finalFrame = 0;
     _writeBufferOffset = 0;
     _readBufferOffset = 0;
-    BaseSocketEndpointT::resetHttpSocketState();
+    BaseSocketEndpointT::resetHttpState();
   }
 
   std::vector<char> _sendBuffer;

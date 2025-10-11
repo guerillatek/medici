@@ -21,7 +21,8 @@ class HTTPLiveClientEndpoint
       std::string acceptedCompressionEncodings;
       if (responsePayloadOptions.acceptedCompressionsFlag &
           std::to_underlying(http::SupportedCompression::GZip)) {
-        acceptedCompressionEncodings = "gzip";
+        acceptedCompressionEncodings =
+            to_encoding_value(http::SupportedCompression::GZip);
       }
 
       if (responsePayloadOptions.acceptedCompressionsFlag &
@@ -29,7 +30,8 @@ class HTTPLiveClientEndpoint
         if (!acceptedCompressionEncodings.empty()) {
           acceptedCompressionEncodings += ", ";
         }
-        acceptedCompressionEncodings += "deflate";
+        acceptedCompressionEncodings +=
+            to_encoding_value(http::SupportedCompression::HttpDeflate);
       }
 
       if (responsePayloadOptions.acceptedCompressionsFlag &
@@ -37,7 +39,8 @@ class HTTPLiveClientEndpoint
         if (!acceptedCompressionEncodings.empty()) {
           acceptedCompressionEncodings += ", ";
         }
-        acceptedCompressionEncodings += "br";
+        acceptedCompressionEncodings +=
+            to_encoding_value(http::SupportedCompression::Brotli);
       }
 
       if (!acceptedCompressionEncodings.empty()) {
@@ -68,9 +71,20 @@ public:
                             endpointPollManager,
                             [this](const http::HttpFields &httpFields,
                                    std::string_view payload, TimePoint tp) {
-                              return _payloadHandler(
+                              auto result = _payloadHandler(
                                   httpFields, payload,
                                   BaseSocketEndpointT::getResponseCode(), tp);
+                              if (!result) {
+                                return result;
+                              }
+                              if (!this->_sendQueue.empty()) {
+                                return this->getConnectionManager()
+                                    .getEventQueue()
+                                    .postAction([this]() {
+                                      return this->sendQueuedHttpData();
+                                    });
+                              }
+                              return Expected{};
                             },
                             std::forward<decltype(outgoingPayloadHandler)>(
                                 outgoingPayloadHandler),
@@ -98,7 +112,7 @@ public:
     auto canSend = this->_sendQueue.empty();
     this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
                                   std::string{content}, compression,
-                                  this->_uriPath, "", responsePayloadOptions);
+                                  this->_uriPath, responsePayloadOptions);
     if (canSend) {
       return this->sendQueuedHttpData();
     }
@@ -145,7 +159,7 @@ public:
 
       this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
                                     multipartPayload, compression,
-                                    this->_uriPath, "", responsePayloadOptions);
+                                    this->_uriPath, responsePayloadOptions);
 
     } else {
       // No file content so encode as URL encoded form
@@ -164,6 +178,9 @@ public:
             !result) {
           return result;
         }
+        if (!queryString.empty()) {
+          this->setURIPath(this->_uriPath+"?"+queryString);
+        }
       } else {
         payload = expectedEncodedForm.value();
         if (auto result = this->clarifySendHeaders(
@@ -174,7 +191,6 @@ public:
         }
       }
 
-      payload = expectedEncodedForm.value();
       if (auto result =
               applyAcceptedCompressions(responsePayloadOptions, headersValues);
           !result) {
@@ -183,7 +199,7 @@ public:
 
       this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
                                     payload, compression, this->_uriPath,
-                                    queryString, responsePayloadOptions);
+                                    responsePayloadOptions);
     }
 
     if (canSend) {

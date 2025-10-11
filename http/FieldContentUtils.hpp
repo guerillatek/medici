@@ -26,7 +26,7 @@ bool operator==(const FieldValueMap &lhs, const FieldValueMap &rhs);
 
 class FieldContentUtils {
 public:
-  static FieldValueMap parseURLEncodingToFields(const std::string &);
+  static FieldValueMap parseURLEncodingToFields(std::string);
   static ExpectedValue encodeFieldsToURL(const FieldValueMap &);
   static ExpectedValue encodeFieldsToRequestHeader(HTTPAction action,
                                                    const std::string &uriPath,

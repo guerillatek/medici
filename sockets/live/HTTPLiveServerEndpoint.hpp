@@ -44,9 +44,10 @@ public:
       http::SupportedCompression compression =
           http::SupportedCompression::None) override {
     auto canSend = this->_sendQueue.empty();
-    this->_sendQueue.emplace_back(
-        std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
-        std::string{content}, compression, "", this->_uriPath, std::nullopt);
+    this->_sendQueue.emplace_back(std::nullopt, headersValues,
+                                  HttpResponseHeader{responseCode, message},
+                                  std::string{content}, compression,
+                                  this->_uriPath, HttpResponsePayloadOptions{});
     if (!canSend) {
       return {};
     }
@@ -67,9 +68,10 @@ public:
       return std::unexpected(
           std::format("Attempted to send non-existent file '{}'", filePath));
     }
-    this->_sendQueue.emplace_back(
-        std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
-        targetContent, compressed, this->_uriPath, "", std::nullopt);
+    this->_sendQueue.emplace_back(std::nullopt, headersValues,
+                                  HttpResponseHeader{responseCode, message},
+                                  targetContent, compressed, this->_uriPath,
+                                  HttpResponsePayloadOptions{});
     if (!canSend) {
       return {};
     }
@@ -109,6 +111,22 @@ private:
                                      BaseSocketEndpointT::getRequestURIPath(),
                                      requestHeaders, formFields, tp);
       }
+    } else if ((this->getIncomingAction() == http::HTTPAction::GET) &&
+               (this->getRequestURIPath().find('?') != std::string::npos)) {
+      // URL Encoded form data in GET request
+      http::HttpFields formFields;
+      auto queryString = this->getRequestURIPath().substr(
+          this->getRequestURIPath().find('?') + 1);
+      auto loadResult = formFields.loadFromURLString(std::string{queryString});
+      if (!loadResult) {
+        return std::unexpected(
+            std::format("Failed to parse URL encoded form data: error={}",
+                        loadResult.error()));
+      }
+      auto uriPath = this->getRequestURIPath().substr(
+          0, this->getRequestURIPath().find('?'));
+      return _serverPayloadHandler(BaseSocketEndpointT::getIncomingAction(),
+                                   uriPath, requestHeaders, formFields, tp);
     }
     return _serverPayloadHandler(BaseSocketEndpointT::getIncomingAction(),
                                  BaseSocketEndpointT::getRequestURIPath(),

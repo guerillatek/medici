@@ -15,24 +15,24 @@ static std::regex Equal(R"(\=)");
 static std::regex Ampersand(R"(\&)");
 
 FieldValueMap
-FieldContentUtils::parseURLEncodingToFields(const std::string &content) {
+FieldContentUtils::parseURLEncodingToFields(std::string content) {
   std::string fieldName;
   std::string fieldValue;
   bool scanningField = true;
   FieldValueMap fieldValueMap;
 
   while (!content.empty()) {
-    auto matchFunction = [](std::string fieldContent,
+    auto matchFunction = [](std::string& content,
                             std::regex &expression) -> std::string {
       std::smatch match;
-      regex_search(fieldContent, match, expression);
+      regex_search(content, match, expression);
       if (!match.size()) {
         return std::string{};
       }
       const auto &matchContent = match.str(0);
-      if (fieldContent.compare(0, matchContent.size(), matchContent) == 0) {
+      if (content.compare(0, matchContent.size(), matchContent) == 0) {
         // We have a valid match, update content to exclude it
-        fieldContent = fieldContent.substr(match.str(0).size());
+        content = content.substr(match.str(0).size());
         return matchContent;
       }
       return std::string{};
