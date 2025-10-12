@@ -45,7 +45,11 @@ public:
                       closeHandler,
                       disconnectedHandler,
                       onActiveHandler},
-        _sslState{SSLState::Disconnected} {}
+        _sslState{SSLState::Disconnected} {
+    EndpointBaseT::resizeInboundBuffer(1024 *
+                                       17); // SSL_Read only delivers 16KB at a
+                                            // time. Extra 1K for prepended data
+  }
 
   SSLLiveEndpoint(int fd, const IPEndpointConfig &config,
                   IIPEndpointPollManager &endpointPollManager,
@@ -65,6 +69,9 @@ public:
                       disconnectedHandler,
                       onActiveHandler},
         _sslState{SSLState::RemoteClientConnecting} {
+    EndpointBaseT::resizeInboundBuffer(1024 *
+                                       17); // SSL_Read only delivers 16KB at a
+                                            // time. Extra 1K for prepended data
     auto sslContextResult = this->getConnectionManager().getSSLServerContext();
     if (!sslContextResult) {
       throw std::runtime_error(sslContextResult.error());
@@ -289,32 +296,46 @@ public:
 
   Expected onPayloadReady(TimePoint readTime) override {
 
-    size_t bytesRead = 0;
-    const auto rc =
-        SSL_read_ex(_sslSocket.get(), this->getInboundBufferWritePos(),
-                    this->getInboundBufferAvailableSize(), &bytesRead);
-    if (rc == 1) [[likely]] {
-      if (bytesRead == 0) {
-        SSL_shutdown(_sslSocket.get());
-        this->getConnectionManager().close();
-        _sslSocket.reset();
-        _sslState = SSLState::Disconnected;
-        return onDisconnected("No bytes read on ssl read ... remote connection "
-                              "dropped connection",
-                              this->getConfig());
+    int rc = 0;
+    while (true) {
+      size_t bytesRead = 0;
+      auto rc = SSL_read_ex(_sslSocket.get(), this->getInboundBufferWritePos(),
+                            this->getInboundBufferAvailableSize(), &bytesRead);
+      if (rc == 1) [[likely]] {
+        if (bytesRead == 0) {
+          SSL_shutdown(_sslSocket.get());
+          this->getConnectionManager().close();
+          _sslSocket.reset();
+          _sslState = SSLState::Disconnected;
+          return onDisconnected(
+              "No bytes read on ssl read ... remote connection "
+              "dropped connection",
+              this->getConfig());
+        }
+
+        // BIO *bio = BIO_new_fp(stdout, BIO_NOCLOSE);// Use stdout for output
+        // if (bio) {
+        //  Dump the buffer content in hex and ASCII
+        // BIO_dump(bio, _inboundBuffer.data(), static_cast<int>(bytesRead));
+        // Free the BIO
+        //  BIO_free(bio);
+        //  }
+        auto preparedPayload = std::string_view{
+            this->getInboundBuffer().data(),
+            bytesRead + EndpointBaseT::getAndClearPrependSize()};
+        auto result =
+            this->getEventHandlers().onPayloadRead(preparedPayload, readTime);
+        if (!result) {
+          return result;
+        }
+        int pending = SSL_pending(_sslSocket.get());
+        if (pending == 0) {
+          return {}; // No more data to read
+        }
+      } else {
+        // Handle SSL return codes
+        break;
       }
-
-      // BIO *bio = BIO_new_fp(stdout, BIO_NOCLOSE);// Use stdout for output
-      // if (bio) {
-      //  Dump the buffer content in hex and ASCII
-      // BIO_dump(bio, _inboundBuffer.data(), static_cast<int>(bytesRead));
-      // Free the BIO
-      //  BIO_free(bio);
-      //  }
-
-      return this->getEventHandlers().onPayloadRead(
-          std::string_view{this->getInboundBufferWritePos(), bytesRead},
-          readTime);
     }
 
     std::string errorMessage;

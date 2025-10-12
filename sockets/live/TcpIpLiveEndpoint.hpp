@@ -32,7 +32,9 @@ public:
             outgoingPayloadHandler,
             closeHandler,
             DisconnectedHandlerT,
-            onActiveHandler} {}
+            onActiveHandler} {
+    EndpointBaseT::resizeInboundBuffer(config.recvBufferKB() * 1024);
+  }
 
   // Server side constructor
   TcpIpLiveEndpoint(int fd, const IPEndpointConfig &config,
@@ -51,7 +53,9 @@ public:
             outgoingPayloadHandler,
             closeHandler,
             DisconnectedHandlerT,
-            onActiveHandler} {}
+            onActiveHandler} {
+    EndpointBaseT::resizeInboundBuffer(config.recvBufferKB() * 1024);
+  }
 
   // ITcpIpEndpoint
   const std::string &name() const { return this->getConfig().name(); }
@@ -169,8 +173,9 @@ public:
       return onDisconnected(strerror(errno), this->getConfig());
     }
     return this->getEventHandlers().onPayloadRead(
-        std::string_view{this->getInboundBufferWritePos(),
-                         static_cast<size_t>(bytesRead)},
+        std::string_view{this->getInboundBuffer().data(),
+                         static_cast<size_t>(bytesRead) +
+                             EndpointBaseT::getAndClearPrependSize()},
         readTime);
   }
 

@@ -93,7 +93,7 @@ public:
         this->getConnectionManager().getConfig().name() + "_remote-" +
             remoteIp + ":" + std::to_string(remotePort),
         remoteIp, remotePort,
-        this->getConnectionManager().getConfig().inBufferKB(),
+        this->getConnectionManager().getConfig().recvBufferKB(),
         this->getConnectionManager().getConfig().interface()};
     return _newListenerEndpointHandler(clientFd, remoteConfig);
   }

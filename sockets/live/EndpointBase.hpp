@@ -27,7 +27,7 @@ public:
                                         DisconnectedHandlerT,
                                         onActiveHandler},
         _connectionManager{config, endpointPollManager, *this, connectionType} {
-    _inboundBuffer.resize(config.inBufferKB() * 1024);
+
   }
 
   EndpointBase(int fd, ConnectionType connectionType,
@@ -47,7 +47,7 @@ public:
                                         onActiveHandler},
         _connectionManager{config, fd, endpointPollManager, *this,
                            connectionType} {
-    _inboundBuffer.resize(config.inBufferKB() * 1024);
+
     if (connectionType == ConnectionType::TCP) {
       if (auto result = _connectionManager.registerWithEpoll(); !result) {
         throw std::runtime_error(result.error());
@@ -61,6 +61,7 @@ public:
   auto &getConfig() const { return _config; }
 
 protected:
+  void resizeInboundBuffer(size_t newSize) { _inboundBuffer.resize(newSize); }
   auto &getConnectionManager() { return _connectionManager; }
 
   auto &getConnectionManager() const { return _connectionManager; }
@@ -96,6 +97,12 @@ protected:
     }
     std::memcpy(_inboundBuffer.data(), content, contentSize);
     return {};
+  }
+
+  auto getAndClearPrependSize() {
+    auto size = _inboundWriteOffset;
+    _inboundWriteOffset = 0;
+    return size;
   }
 
   IPEndpointConfig _config;

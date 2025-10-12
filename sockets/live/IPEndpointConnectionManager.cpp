@@ -117,7 +117,7 @@ Expected IPEndpointConnectionManager::open() {
     }
   }
 
-  int inboundBufferSize = static_cast<int>(_config.inBufferKB() * 1024);
+  int inboundBufferSize = static_cast<int>(_config.recvBufferKB() * 1024);
   setsockopt(_fd, SOL_SOCKET, SO_RCVBUF, &inboundBufferSize,
              sizeof(inboundBufferSize));
 

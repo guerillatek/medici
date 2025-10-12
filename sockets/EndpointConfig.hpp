@@ -32,16 +32,16 @@ class IPEndpointConfig {
   std::string _host{};
   std::uint16_t _port{0};
   std::string _interface{};
-  std::uint32_t _inBufferKB{1};
+  std::uint32_t _recvBufferKB{1};
   IOloggingConfig _ioLogging{};
 
 public:
   IPEndpointConfig() {}
   IPEndpointConfig(const std::string &name, const std::string &host,
-                   std::uint16_t port, std::uint32_t inBufferKB = 1,
+                   std::uint16_t port, std::uint32_t recvBufferKB = 16,
                    std::string interface = "", IOloggingConfig ioLogging = {})
       : _name{name}, _host{host}, _port{port}, _interface{interface},
-        _inBufferKB{inBufferKB}, _ioLogging{ioLogging}
+        _recvBufferKB{recvBufferKB}, _ioLogging{ioLogging}
 
   {}
 
@@ -57,7 +57,7 @@ public:
 
   auto interface() const { return _interface; }
 
-  auto inBufferKB() const { return _inBufferKB; }
+  auto recvBufferKB() const { return _recvBufferKB; }
 
   auto &ioLogging() const { return _ioLogging; }
 };

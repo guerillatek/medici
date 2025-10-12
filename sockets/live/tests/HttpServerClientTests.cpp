@@ -328,7 +328,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
-                                  
+
     remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
                                   formData, http::SupportedCompression::GZip,
                                   sockets::HttpResponsePayloadOptions{});
@@ -396,6 +396,34 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
 
     RunTest();
   }
+
+  void RunHTTSecureTest() {
+    endpointType = "HTTP Unsecure";
+    remoteClient =
+        clientThreadContext->getSocketFactory().createHttpsClientEndpoint(
+            listenEndpoint,
+            [this](const http::HttpFields &headers, std::string_view payload,
+                   int responseCode, medici::TimePoint tp) {
+              return HandleServerResponse(headers, payload, responseCode, tp);
+            },
+            [this](std::string_view payload, medici::TimePoint tp) {
+              return Expected{};
+            },
+            [this](const std::string &reason,
+                   const medici::sockets::IPEndpointConfig &) {
+              BOOST_TEST_MESSAGE(
+                  std::format("Closing client: reason={}", reason));
+              return clientThreadContext->stop();
+            },
+            clientDisconnectHandler,
+            [this]() {
+              BOOST_TEST_MESSAGE(
+                  std::format(" {} client Active", endpointType));
+              return StartTests();
+            });
+
+    RunTest();
+  }
 };
 
 } // namespace medici::tests
@@ -406,11 +434,11 @@ BOOST_FIXTURE_TEST_SUITE(MediciUnitHTTPUnsecureTests,
 BOOST_AUTO_TEST_CASE(HTTP_UNSECURE_TEST) { RunHTTPUnsecureTest(); };
 
 BOOST_AUTO_TEST_SUITE_END();
-/*
-BOOST_FIXTURE_TEST_SUITE(
-    MediciUnitTCPSSLTests,
-    medici::tests::HttpServerClientTestHarness<medici::sockets::live::SSLEndpoint>);
 
-BOOST_AUTO_TEST_CASE(SSL_TEST) { RunSSLTest(); };
+BOOST_FIXTURE_TEST_SUITE(MediciUnitHTTPSecureTests,
+                         medici::tests::HttpServerClientTestHarness<
+                             medici::sockets::live::HttpsServerEndpoint>);
 
-BOOST_AUTO_TEST_SUITE_END();*/
+BOOST_AUTO_TEST_CASE(SSL_TEST) { RunHTTSecureTest(); };
+
+BOOST_AUTO_TEST_SUITE_END();
