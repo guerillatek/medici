@@ -1,7 +1,3 @@
-std::string writeStringToTempFile(const std::string &content,
-                                  const std::string &prefix,
-                                  const std::string &suffix);
-
 static const char *serverCertificate =
     R"(-----BEGIN CERTIFICATE-----
 MIIDQzCCAiugAwIBAgIUBlXak0xIKzmQTVnomuKfK3hHPqIwDQYJKoZIhvcNAQEL

@@ -245,7 +245,6 @@ protected:
               headersValues.addFieldValue("Content-Length",
                                           std::to_string(encodedForm.size()));
             }
-
           } else if constexpr (std::is_same_v<T, http::MultipartPayload>) {
             auto encodedMPartFormResult = targetContent.encodeToString();
             if (!encodedMPartFormResult) {
@@ -255,16 +254,16 @@ protected:
                               encodedMPartFormResult.error()));
             }
             auto encodedForm = encodedMPartFormResult.value();
-            if (!encodedForm.empty()) {
-
-              content = encodedForm; // reassign as std::string
-              if (compressionEncoding != http::SupportedCompression::None) {
-                return compressStringContent(encodedForm);
-              }
-              headersValues.addFieldValue("Content-Length",
-                                          std::to_string(encodedForm.size()));
+            if (encodedForm.empty()) {
+              return {};
             }
-
+            if (compressionEncoding != http::SupportedCompression::None) {
+              return compressStringContent(encodedForm);
+            }
+            content = encodedForm;
+            headersValues.addFieldValue("Content-Length",
+                                          std::to_string(encodedForm.size()));
+            return {};
           } else if constexpr (std::is_same_v<T, std::filesystem::path>) {
 
             if (compressionEncoding != http::SupportedCompression::None) {
@@ -339,19 +338,6 @@ protected:
             payload += targetContent;
             return BaseSocketEndpointT::sendAsync(
                 payload, [this]() { return onPayloadSent(); });
-          } else if constexpr (std::is_same_v<T, http::MultipartPayload>) {
-            auto partialPayload = targetContent.partialEncodeNonFileToString();
-            if (!partialPayload) {
-              return std::unexpected(
-                  std::format("Failed to encode multipart payload: error={}",
-                              partialPayload.error()));
-            }
-            payload += partialPayload.value();
-            return BaseSocketEndpointT::sendAsync(payload, [this,
-                                                            targetContent]() {
-              return sendMultipartFiles(targetContent,
-                                        [this]() { return onPayloadSent(); });
-            });
           }
           return std::unexpected("Unsupported content type in send queue");
         },
@@ -395,15 +381,14 @@ protected:
     }
     return BaseSocketEndpointT::sendAsync(
         mpPayload.getActiveFileBoundaryHeader(),
-        [this, mpPayload = std::move(mpPayload), onComplete]() {
+        [this, mpPayload, onComplete]() {
           auto expectedPath = mpPayload.getActiveFile();
-          return sendFileContent(expectedPath.value(),
-                                 [this, mpPayload = std::move(mpPayload),
-                                  onComplete]() mutable -> Expected {
-                                   mpPayload.removeActiveFile();
-                                   return sendMultipartFiles(
-                                       std::move(mpPayload), onComplete);
-                                 });
+          return sendFileContent(
+              expectedPath.value(),
+              [this, mpPayload, onComplete]() mutable -> Expected {
+                mpPayload.removeActiveFile();
+                return sendMultipartFiles(std::move(mpPayload), onComplete);
+              });
         });
   }
 

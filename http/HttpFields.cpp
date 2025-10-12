@@ -7,25 +7,42 @@ namespace medici::http {
 
 HttpFields::HttpFields(const MultipartPayload &multipartPayload) {
   _fieldValueMap = multipartPayload.getFormFields();
-  _hasFilePathFields = multipartPayload.hasFileContent();
   for (auto &mapEntry : multipartPayload.getFilePathFields()) {
     _fieldValueMap.emplace(mapEntry.first,
                            FieldValueEntry{mapEntry.second.string(), true});
   }
+  updateFieldCountAndArrayFlags();
+}
+
+HttpFields::HttpFields(const FieldValueMap &fieldValueMap)
+    : _fieldValueMap{fieldValueMap} {
+  std::string lastFieldName;
+  updateFieldCountAndArrayFlags();
 }
 
 Expected HttpFields::loadFromURLString(const std::string &urlEncodedFields) {
   _fieldValueMap =
       FieldContentUtils::parseURLEncodingToFields(urlEncodedFields);
-  // Populate field names and array fields
-  std::string lastFieldName;
-  for (auto &mapEntry : _fieldValueMap) {
-    if (mapEntry.first != lastFieldName) {
-      ++_fieldCount;
-    }
-    lastFieldName = mapEntry.first;
-  }
+  updateFieldCountAndArrayFlags();
   return {};
+}
+
+void HttpFields::updateFieldCountAndArrayFlags() {
+  _fieldCount = 0;
+  _hasArrayFields = false;
+  _hasFilePathFields = false; // Reset file path fields flag
+  std::string lastFieldName;
+  for (const auto &[name, entry] : _fieldValueMap) {
+    if (entry.isFilePath) {
+      _hasFilePathFields = true;
+    }
+    if (name != lastFieldName) {
+      ++_fieldCount;
+      lastFieldName = name;
+    } else {
+      _hasArrayFields = true;
+    }
+  }
 }
 
 std::expected<std::string, std::string>

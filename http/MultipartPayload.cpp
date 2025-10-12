@@ -52,7 +52,8 @@ ExpectedValue MultipartPayload::partialEncodeNonFileToString() const {
   return payloadStream.str();
 }
 
-Expected MultipartPayload::decodePayload(std::string_view payload) {
+Expected MultipartPayload::decodePayload(std::string_view payload, const std::string &payloadBoundary) {
+  _boundary = payloadBoundary;
   std::string boundary = "--" + _boundary;
   size_t pos = 0;
   size_t end = payload.size();

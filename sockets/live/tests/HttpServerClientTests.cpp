@@ -92,7 +92,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
             }} {}
 
   bool ValidateFormData(const http::HttpFields &payload) {
-    if (payload.getFieldCount() != 3) {
+    if (payload.getFieldCount() < 3) {
       BOOST_FAIL(
           std::format("Multipart field count mismatch: expected 3 got {}",
                       payload.getFieldCount()));
@@ -117,6 +117,32 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
       BOOST_FAIL(
           std::format("field3 value mismatch: expected 'value3' got '{}'",
                       field3 ? field3.value() : "NOT FOUND"));
+      return false;
+    }
+    return true;
+  }
+
+  bool ValidateMultiPartFormData(const http::HttpFields &payload) {
+    auto nonFileResult = ValidateFormData(payload);
+    if (!nonFileResult) {
+      return false;
+    }
+    BOOST_CHECK(payload.hasFilePathFields());
+    auto result = payload.getField("bookJSON");
+    if (!result) {
+      BOOST_FAIL("bookJSON field not found");
+      return false;
+    }
+    std::ifstream fileStream(result.value());
+    if (!fileStream.is_open()) {
+      BOOST_FAIL(
+          std::format("Failed to open multipart file: {}", result.value()));
+      return false;
+    }
+    std::string fileContent((std::istreambuf_iterator<char>(fileStream)),
+                            std::istreambuf_iterator<char>());
+    if (fileContent != largeContent) {
+      BOOST_FAIL("Multipart file content mismatch");
       return false;
     }
     return true;
@@ -191,6 +217,27 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
                               http::ContentType::TextPlain,
                               http::SupportedCompression::None);
     }
+    if (requestURI == "/testing/formTestMultipart" &&
+        action == http::HTTPAction::POST) {
+      if (std::get_if<http::HttpFields>(&payload) == nullptr) {
+        BOOST_FAIL("Expected HttpFields payload");
+        return std::unexpected("Expected HttpFields payload");
+      }
+      auto &formPayload = std::get<http::HttpFields>(payload);
+      if (!ValidateMultiPartFormData(formPayload)) {
+        return std::unexpected("Non File field form data validation failed");
+      }
+      http::HttpFields headers;
+      if (!requestHeaders.HasField("Content-Encoding")) {
+        headers.addFieldValue("Custom-Header",
+                              "formMultiPartResponseCompressed");
+      } else {
+        headers.addFieldValue("Custom-Header", "formMultiPartResponse");
+      }
+      return sendHttpResponse(headers, 200, "OK", "SUCCESS",
+                              http::ContentType::TextPlain,
+                              http::SupportedCompression::None);
+    }
     return Expected{};
   }
 
@@ -225,9 +272,16 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
       BOOST_CHECK(responseCode == 200);
       BOOST_CHECK(payload == "SUCCESS");
       formGetSuccessful = true;
+    } else if (headerValue == "formMultiPartResponse") {
+      BOOST_CHECK(responseCode == 200);
+      BOOST_CHECK(payload == "SUCCESS");
+      formMultiPartSuccessful = true;
+    } else if (headerValue == "formMultiPartResponseCompressed") {
+      BOOST_CHECK(responseCode == 200);
+      BOOST_CHECK(payload == "SUCCESS");
+      formMultiPartSuccessful = true;
       remoteClient->closeEndpoint("Test complete");
     }
-
     return Expected{};
   }
 
@@ -267,6 +321,18 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     remoteClient->sendFormRequest(http::HTTPAction::GET, http::HttpFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
+    remoteClient->setURIPath("/testing/formTestMultipart");
+    auto filePath =
+        http::writeBufferToTempFile(largeContent, "testFile", ".json");
+    formData.addFieldValue("bookJSON", filePath, true);
+    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
+                                  formData, http::SupportedCompression::None,
+                                  sockets::HttpResponsePayloadOptions{});
+                                  
+    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
+                                  formData, http::SupportedCompression::GZip,
+                                  sockets::HttpResponsePayloadOptions{});
+
     return Expected{};
   }
 

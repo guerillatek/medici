@@ -39,7 +39,7 @@ std::string writeStringToTempFile(const std::string &content,
     // Clean up on write failure
     std::filesystem::remove(tempFilePath);
     throw std::runtime_error("Failed to write content to temporary file: " +
-                              tempFilePath.string());
+                             tempFilePath.string());
   }
 
   return tempFilePath;

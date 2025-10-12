@@ -88,7 +88,14 @@ private:
               .find("multipart/form-data") != std::string::npos) {
         // Multipart form data
         http::MultipartPayload multiPartPayload;
-        if (auto result = multiPartPayload.decodePayload(payload); !result) {
+        auto boundaryField = requestHeaders.getField("Content-Type").value();
+        auto boundaryPos = boundaryField.find("boundary=");
+        if (boundaryPos == std::string::npos) {
+          return std::unexpected(
+              "Malformed multipart/form-data request: missing boundary");
+        }
+        auto boundary = boundaryField.substr(boundaryPos + 9);
+        if (auto result = multiPartPayload.decodePayload(payload,boundary); !result) {
           return result;
         }
         http::HttpFields formFields{multiPartPayload};

@@ -43,7 +43,7 @@ public:
   auto &getFilePathFields() const { return _filePathFields; }
   auto &getFormFields() const { return _formFields; }
 
-  Expected decodePayload(const std::string_view);
+  Expected decodePayload(const std::string_view, const std::string &boundary);
 
 private:
   std::string _boundary{};

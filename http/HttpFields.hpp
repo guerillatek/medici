@@ -16,6 +16,7 @@ class MultipartPayload;
 class HttpFields {
 public:
   explicit HttpFields(const MultipartPayload &multipartPayload);
+  explicit HttpFields(const FieldValueMap &multipartPayload);
   HttpFields() = default;
   ~HttpFields() = default;
   HttpFields(const HttpFields &other) = default;
@@ -44,6 +45,9 @@ public:
       ++_fieldCount;
     }
     _fieldValueMap.emplace(fieldName, FieldValueEntry{value, isFilePath});
+    if (isFilePath) {
+      _hasFilePathFields = true;
+    } 
   }
 
   auto encodeAsQueryString() const {
@@ -88,6 +92,7 @@ public:
   }
 
 protected:
+  void updateFieldCountAndArrayFlags();
   std::expected<FieldValueMap::const_iterator, std::string>
   getFieldEntry(std::string fieldName) const {
     std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
