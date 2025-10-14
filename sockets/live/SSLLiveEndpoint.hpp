@@ -136,7 +136,7 @@ public:
     }
     _sslState = SSLState::Connected;
     this->getConnectionManager().registerWithEpoll();
-    if (auto result = this->getEventHandlers().onActive(); !result) {
+    if (auto result = this->onActive(); !result) {
       return std::unexpected(result.error());
     }
     return true;
@@ -327,6 +327,9 @@ public:
             this->getEventHandlers().onPayloadRead(preparedPayload, readTime);
         if (!result) {
           return result;
+        }
+        if (_sslSocket.get() == nullptr) {
+          return {}; // Disconnected during payload processing
         }
         int pending = SSL_pending(_sslSocket.get());
         if (pending == 0) {

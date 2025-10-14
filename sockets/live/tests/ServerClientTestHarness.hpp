@@ -38,7 +38,7 @@ struct ServerClientTestHarness {
         "Client", 1, std::chrono::microseconds{1000}, SystemClockNow{});
 
     clientRunFunc = [this, &remoteClient]() {
-      clientThreadContext->getEventQueue().postAction([this,&remoteClient]() {
+      clientThreadContext->getEventQueue().postAction([this, &remoteClient]() {
         BOOST_TEST_MESSAGE("Starting client");
         if (auto result = remoteClient->openEndpoint(); !result) {
           BOOST_ERROR(std::format("Failed to open client endpoint: {}",
@@ -58,9 +58,9 @@ struct ServerClientTestHarness {
 
   RunContextTPtr clientThreadContext;
 
-  medici::sockets::IPEndpointConfig listenEndpoint{"listenHost", "127.0.0.1",
-                                                   12345};
 
+  medici::sockets::WSEndpointConfig listenEndpoint{"listenHost", "127.0.0.1",
+                                                   12345, "/",false};
   std::string endpointType;
 
   medici::sockets::CloseHandlerT listenCloseHandler =

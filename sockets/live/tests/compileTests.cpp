@@ -85,7 +85,7 @@ BOOST_AUTO_TEST_CASE(TCP_LIVE_ENDPOINT_TEST) {
   auto sslEndpoint = runContext->getSocketFactory().createSSLClientEndpoint(
       config, std::move(payloadHandler2), SocketPayloadHandlerT{},
       CloseHandlerT{}, DisconnectedHandlerT{}, OnActiveHandlerT{});
-  HttpEndpointConfig httpConfig{"", "", 0, ""};
+  WSEndpointConfig httpConfig{"", "", 0, "", false};
 
   auto httpClientEndpoint =
       runContext->getSocketFactory().createHttpClientEndpoint(

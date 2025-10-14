@@ -99,7 +99,7 @@ public:
   }
 
   IWebSocketEndpointPtr
-  createWSClientEndpoint(const HttpEndpointConfig &config,
+  createWSClientEndpoint(const WSEndpointConfig &config,
                          WebSocketPayloadHandlerC auto &&payloadHandler,
                          WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,
                          CloseHandlerT closeHandler,
@@ -111,7 +111,7 @@ public:
   }
 
   IWebSocketEndpointPtr createWSSClientEndpoint(
-      const HttpEndpointConfig &config,
+      const WSEndpointConfig &config,
       WebSocketPayloadHandlerC auto &&payloadHandler,
       WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,
       CloseHandlerT closeHandler, DisconnectedHandlerT disconnectHandler,
@@ -161,7 +161,7 @@ private:
 
   template <template <class> class LiveEndpointT>
   IWebSocketEndpointPtr createWSClientEndpointImpl(
-      const HttpEndpointConfig &config,
+      const WSEndpointConfig &config,
       WebSocketPayloadHandlerC auto &&payloadHandler,
       WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,
       CloseHandlerT closeHandler, DisconnectedHandlerT disconnectHandler,
@@ -204,8 +204,6 @@ using WebSocketLiveClientEndpoint =
     WebSocketLiveEndpoint<HTTPLiveClientEndpointT, live::TcpIpLiveEndpoint>;
 using WebSSocketLiveClientEndpoint =
     WebSocketLiveEndpoint<HTTPLiveClientEndpointT, live::SSLLiveEndpoint>;
-
-
 
 using WebSocketLiveServerEndpoint =
     WebSocketLiveEndpoint<HTTPLiveServerEndpoint, live::TcpIpLiveEndpoint>;

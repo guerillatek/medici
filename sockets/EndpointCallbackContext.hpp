@@ -92,8 +92,7 @@ public:
                      DisconnectedHandlerT &disconnectedHandler,
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
-                                    CoordinatorT>{std::forward<ArgsT>(args)...,
-                                                  endPointCoordinator, config},
+                                    CoordinatorT>{endPointCoordinator, config},
         _endpoint{
             std::forward<ArgsT>(args)...,
             config,
@@ -119,7 +118,7 @@ public:
                 const auto &reason, const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason);
+              return disconnectedHandler(reason, endpointConfig);
             },
             [this, &onActiveHandler]() {
               this->_endPointCoordinator.setActiveEndpoint(
@@ -207,20 +206,21 @@ public:
                      DisconnectedHandlerT &disconnectedHandler,
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
-                                    CoordinatorT>{std::forward<ArgsT>(args)...,
-                                                  endPointCoordinator, config},
+                                    CoordinatorT>{endPointCoordinator, config},
         _endpoint{
             std::forward<ArgsT>(args)...,
             config,
             endpointPollManager,
-            [this, &incomingPayloadHandler](auto payload, WSOpCode opCode,
-                                            auto tp) {
+            [this, &incomingPayloadHandler](std::string_view payload,
+                                            WSOpCode opCode,
+                                            medici::TimePoint tp) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
               return incomingPayloadHandler(payload, opCode, tp);
             },
-            [this, &outgoingPayloadHandler](auto payload, WSOpCode opCode,
-                                            auto tp) {
+            [this, &outgoingPayloadHandler](std::string_view payload,
+                                            WSOpCode opCode,
+                                            medici::TimePoint tp) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
               return outgoingPayloadHandler(payload, opCode, tp);
@@ -231,10 +231,11 @@ public:
                   _endpoint.getEndpointUniqueId());
               return closeHandler(reason, endpointConfig);
             },
-            [this, &disconnectedHandler](const auto &reason) {
+            [this, &disconnectedHandler](
+                const auto &reason, const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason);
+              return disconnectedHandler(reason, endpointConfig);
             },
             [this, &onActiveHandler]() {
               this->_endPointCoordinator.setActiveEndpoint(

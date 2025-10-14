@@ -432,6 +432,9 @@ protected:
   }
 
   Expected onPayloadSent() {
+    if (_state == HttpEndpointState::WebsocketPassthrough) {
+      return {};
+    }
     if (_serverSide) {
       _state = HttpEndpointState::AwaitingClientRequest;
     } else {
@@ -716,6 +719,7 @@ protected:
   }
 
   auto &getCompressedDataBuffer() { return _compressedData; }
+  auto &getDecompressedBodyBuffer() { return _decompressedBody; }
 
   // Server side only
   auto getIncomingAction() const { return _incomingAction; }

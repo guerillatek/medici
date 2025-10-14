@@ -42,7 +42,7 @@ public:
                               DisconnectedHandlerT listenerDisconnectHandler,
                               OnActiveHandlerT listenerOnActiveHandler,
                               auto &&listenerRegisterHandler) {
-    if constexpr (IsHttpServerEndpoint<SocketT>) {
+    if constexpr (IsHttpServerEndpoint<SocketT> || IsWebSocketEndpoint<SocketT>) {
       return _threadRunContext.getSocketFactory().createHttpListenerEndpoint(
           listenerEndpointConfig, listenerCloseHandler,
           listenerDisconnectHandler, listenerOnActiveHandler,

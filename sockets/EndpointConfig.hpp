@@ -27,6 +27,11 @@ concept HTTPEndpointConfigC = IPEndpointConfigC<T> && requires(T t) {
   { t.uriPath() } -> std::convertible_to<std::string>;
 };
 
+template <typename T>
+concept WSEndpointConfigC = HTTPEndpointConfigC<T> && requires(T t) {
+  { t.perMessageDeflate() } -> std::convertible_to<bool>;
+};
+
 class IPEndpointConfig {
   std::string _name{};
   std::string _host{};
@@ -84,6 +89,32 @@ public:
   auto uriPath() const { return _uriPath; }
 
   void uriPath(const std::string value) { _uriPath = value; }
+};
+
+class WSEndpointConfig : public HttpEndpointConfig {
+  bool _perMessageDeflate{false};
+
+public:
+  WSEndpointConfig() {};
+  WSEndpointConfig(HttpEndpointConfig &&httpEndpointConfig,
+                   bool perMessageDeflate = false)
+      : HttpEndpointConfig{std::move(httpEndpointConfig)},
+        _perMessageDeflate{perMessageDeflate} {};
+  WSEndpointConfig(const std::string &name, const std::string &host,
+                   std::uint16_t port, const std::string &uri,
+                   bool perMessageDeflate = false)
+      : HttpEndpointConfig(name, host, port, uri),
+        _perMessageDeflate{perMessageDeflate} {}
+
+  WSEndpointConfig(const WSEndpointConfigC auto &config)
+      : HttpEndpointConfig{config},
+        _perMessageDeflate{config.perMessageDeflate()} {}
+
+  WSEndpointConfig(const HTTPEndpointConfigC auto &config,
+                   const std::string &uri = "")
+      : HttpEndpointConfig{config}, _perMessageDeflate{uri} {}
+
+  bool perMessageDeflate() const { return _perMessageDeflate; }
 };
 
 } // namespace  medici::sockets

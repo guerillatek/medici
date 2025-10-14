@@ -99,14 +99,14 @@ concept SocketFactoryC = requires(T t) {
   } -> std::same_as<IHttpClientEndpointPtr>;
 
   {
-    t.createWSClientEndpoint(std::declval<HttpEndpointConfig>(),
+    t.createWSClientEndpoint(std::declval<WSEndpointConfig>(),
                              WebSocketPayloadHandlerT{},
                              WebSocketPayloadHandlerT{}, CloseHandlerT{},
                              DisconnectedHandlerT{}, OnActiveHandlerT{})
   } -> std::same_as<IWebSocketEndpointPtr>;
 
   {
-    t.createWSSClientEndpoint(std::declval<HttpEndpointConfig>(),
+    t.createWSSClientEndpoint(std::declval<WSEndpointConfig>(),
                               WebSocketPayloadHandlerT{},
                               WebSocketPayloadHandlerT{}, CloseHandlerT{},
                               DisconnectedHandlerT{}, OnActiveHandlerT{})

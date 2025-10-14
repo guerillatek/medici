@@ -6,6 +6,7 @@ add_executable(LiveSocketsTests
     TCPClientServerTests.cpp
     ServerClientTestHarness.cpp
     HttpServerClientTests.cpp
+    WSServerClientTests.cpp
 )
 target_include_directories(LiveSocketsTests PUBLIC ../../../..)
 

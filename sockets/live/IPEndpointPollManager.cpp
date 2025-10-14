@@ -198,18 +198,60 @@ ExpectedEventsCount IPEndpointPollManager::pollAndDispatchEndpointsEvents() {
     return 0;
   }
 
-  if (nready == -1) [[likely]] {
-    if (errno == EINTR) [[likely]] {
+  if (nready == -1) {
+    switch (errno) {
+    case EINTR:
+      // Interrupted by signal - retry is safe
       return 0;
+
+    case EBADF:
+    case EINVAL:
+      // Check for invalid fds in registered endpoints and dispatch disconnects
+      for (const auto &[fd, endpoint] : _registeredEndpoints) {
+        struct epoll_event dummy;
+        int result = ::epoll_ctl(fd, EPOLL_CTL_ADD, -1, &dummy);
+
+        if (result == -1) {
+          if (errno == EBADF) {
+            auto result = endpoint.dispatch.onDisconnected(
+                "Connection dropped", endpoint.config);
+            if (!result) {
+              return std::unexpected(result.error());
+            }
+            return 0;
+          }
+          // Other errors (like EINVAL for fd -1) are expected
+        }
+      }
+      break;
+    case EFAULT:
+      return std::unexpected(std::format(
+          "epoll_wait failed: Invalid events buffer in poll manager {}",
+          _name));
+
+    default:
+      return std::unexpected(
+          std::format("epoll_wait failed in poll manager {}: {} (errno={})",
+                      _name, strerror(errno), errno));
     }
   }
   auto epollTS = _clock();
 
   for (int i = 0; i < nready; ++i) {
     const auto &event = events[i];
+    auto registeredEndpoint =
+        reinterpret_cast<RegisteredEndpointEntry *>(event.data.ptr);
+    if (event.events & (EPOLLRDHUP | EPOLLERR | EPOLLHUP)) {
+      // Handle disconnect
+      auto disconnectResult = registeredEndpoint->dispatch.onDisconnected(
+          "Connection dropped", registeredEndpoint->config);
+      if (!disconnectResult) {
+        return std::unexpected(disconnectResult.error());
+      }
+      continue;
+    }
     if (event.events | EPOLLIN) {
-      auto registeredEndpoint =
-          reinterpret_cast<RegisteredEndpointEntry *>(event.data.ptr);
+
       auto handleResult = registeredEndpoint->dispatch.onPayloadReady(epollTS);
       if (!handleResult) {
         return std::unexpected(handleResult.error());
@@ -240,8 +282,8 @@ IPEndpointPollManager::getSSLClientContextStatic() {
 
 //  This will only be called during construction of the IPEndpointPollManager.
 //  While multiple poll managers can exist and run on multiple threads, because
-//  of the absence of thread safety in this function they must all be constructed
-//  on the same thread. This is not an issue when using the
+//  of the absence of thread safety in this function they must all be
+//  constructed on the same thread. This is not an issue when using the
 //  AppRunConfigManager. However, in test environments and other special use
 //  cases where AppRunConfigManager is not used, care must be taken to ensure
 //  this restriction and that only one poll manager is configured with a
