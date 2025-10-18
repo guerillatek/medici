@@ -250,9 +250,12 @@ private:
   EndpointT _endpoint;
 };
 
-template <typename EndpointT, typename CoordinatorT>
+struct NoExtendedContextData {};
+template <typename EndpointT, typename CoordinatorT,
+          typename ExtendedContextData = NoExtendedContextData>
 class EndpointCallbackContext
-    : public CallbackBaseSelect<EndpointT, CoordinatorT> {
+    : public CallbackBaseSelect<EndpointT, CoordinatorT>,
+      ExtendedContextData {
 public:
   using SelectedBase = CallbackBaseSelect<EndpointT, CoordinatorT>;
   template <typename... ArgsT>

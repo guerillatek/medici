@@ -19,3 +19,4 @@ target_include_directories(liveMediciSockets PUBLIC ../../..)
 
 
 add_subdirectory(tests)
+add_subdirectory(exampleApps)

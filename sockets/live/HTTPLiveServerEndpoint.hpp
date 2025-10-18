@@ -65,8 +65,7 @@ public:
     auto targetContent = std::filesystem::path{filePath};
     if (!std::filesystem::exists(targetContent) ||
         !std::filesystem::is_regular_file(targetContent)) {
-      return std::unexpected(
-          std::format("Attempted to send non-existent file '{}'", filePath));
+      return std::unexpected(std::format("file '{}' does not exist", filePath));
     }
     this->_sendQueue.emplace_back(std::nullopt, headersValues,
                                   HttpResponseHeader{responseCode, message},
@@ -95,7 +94,8 @@ private:
               "Malformed multipart/form-data request: missing boundary");
         }
         auto boundary = boundaryField.substr(boundaryPos + 9);
-        if (auto result = multiPartPayload.decodePayload(payload,boundary); !result) {
+        if (auto result = multiPartPayload.decodePayload(payload, boundary);
+            !result) {
           return result;
         }
         http::HttpFields formFields{multiPartPayload};

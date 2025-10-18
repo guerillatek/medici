@@ -1,12 +1,10 @@
 #pragma once
 
-#include "medici/application/AeronAppIOContext.hpp"
-#include "medici/application/AppRunContextConfig.hpp"
+#include "medici/application/ContextThreadConfig.hpp"
 #include "medici/application/IAppContext.hpp"
 #include "medici/application/IPAppRunContext.hpp"
 
 #include <Aeron.h>
-#include <core/ts_log.h>
 #include <format>
 #include <map>
 #include <memory>
@@ -14,7 +12,7 @@
 #include <vector>
 namespace medici::application {
 
-using AppRunContextConfigList = std::vector<AppRunContextConfig>;
+using ContextThreadConfigList = std::vector<ContextThreadConfigPtr>;
 
 template <sockets::SocketFactoryC SocketFactoryT, ClockNowC ClockNowT,
           EndpointEventPollMgrC IPEndpointEventPollMgrT,
@@ -23,7 +21,14 @@ template <sockets::SocketFactoryC SocketFactoryT, ClockNowC ClockNowT,
 class AppRunContextManager {
 
   using IAppContextPtr = std::shared_ptr<IAppContext>;
+  using ExpectedContextPtr = std::expected<IAppContextPtr, std::string>;
+  using ContextFactoryFunction =
+      std::function<ExpectedContextPtr(const ContextThreadConfig &)>;
+  using ContextFactoryFunctionRegistry =
+      std::map<std::string, ContextFactoryFunction>;
+
   using ThreadContextPair = std::pair<std::jthread, IAppContextPtr>;
+
   struct ContextWithRunParams {
     std::string name;
     IAppContextPtr context;
@@ -37,70 +42,139 @@ public:
       IPAppRunContext<SocketFactoryT, ClockNowT, IPEndpointEventPollMgrT,
                       ServiceRequestQueueSize>;
 
-  AppRunContextManager(const AppRunContextConfigList &configList) {
-    for (const AppRunContextConfig &config : configList) {
-      if (config.runContextType() == "IPEndpoints") {
-        _contextByIndex.emplace_back(ContextWithRunParams{
-            config.name(), std::make_shared<IPAppRunContextT>(config, _clock),
-            config.cpu(), config.schedPolicy(), config.schedPriority()});
-        _contextLookup[config.name()] = _contextByIndex.back().context;
-        continue;
+  AppRunContextManager() {
+    _contextFactoryRegistry["IPAppRunContext"] =
+        [this](const ContextThreadConfig &config) -> ExpectedContextPtr {
+      auto ipConfig = dynamic_cast<const IPContextThreadConfig *>(&config);
+      if (ipConfig == nullptr) {
+        return std::unexpected{
+            "AppRunContextManager: Invalid config type for IP context"};
       }
-      throw std::runtime_error(
-          std::format("Unknown run context type, {} specified in config",
-                      config.runContextType()));
+      return std::make_shared<IPAppRunContextT>(*ipConfig, _clock);
+    };
+  }
+
+  Expected configureContexts(const ContextThreadConfigList &configs) {
+    for (const auto &config : configs) {
+      auto it = _contextFactoryRegistry.find(config->runContextType());
+      if (it == _contextFactoryRegistry.end()) {
+        return std::unexpected(std::string{std::format(
+            "No factory for run context type {}", config->runContextType())});
+      }
+      auto contextOrError = it->second(*config);
+      if (!contextOrError) {
+        return std::unexpected(
+            std::string{std::format("Failed to create run context {}: {}",
+                                    config->name(), contextOrError.error())});
+      }
+      auto result = _contextLookup.emplace(
+          config->name(),
+          ContextWithRunParams{.name = config->name(),
+                               .context = *contextOrError,
+                               .cpu = config->_cpu,
+                               .schedPolicy = config->_schedPolicy,
+                               .schedPriority = config->_schedPriority});
+      if (!result.second) {
+        return std::unexpected(std::string{
+            std::format("Duplicate run context name {}", config->name())});
+      }
     }
+    return {};
+  }
+
+  Expected startAllThreads() {
+    for (auto &entry : _contextLookup) {
+      auto threadName = entry.first;
+      auto &context = entry.second.context;
+      _threadsByName.emplace(threadName, std::jthread{[&context, threadName]() {
+                               if (auto result = context->start(); !result) {
+                                 return;
+                               }
+                             }});
+      if (entry.second.cpu) {
+        if (auto result = set_thread_cpu_affinity(
+                _threadsByName[threadName].native_handle(), *entry.second.cpu);
+            !result) {
+          return std::unexpected(std::string{
+              std::format("Failed to set CPU affinity for thread {}: {}",
+                          threadName, result.error())});
+        }
+      }
+      if (entry.second.schedPolicy && entry.second.schedPriority) {
+        if (auto result = set_thread_sched_policy(
+                _threadsByName[threadName].native_handle(),
+                *entry.second.schedPolicy, *entry.second.schedPriority);
+            !result) {
+          return std::unexpected(std::string{
+              std::format("Failed to set scheduling policy for thread {}: {}",
+                          threadName, result.error())});
+        }
+      }
+    }
+    for (auto &threadEntry : _threadsByName) {
+      if (threadEntry.second.joinable()) {
+        threadEntry.second.join();
+      }
+    }
+    return {};
   }
 
   void stopAllThreads() {
-    for (auto &entry : _contextByIndex) {
-      entry.context->stop();
+    for (auto &entry : _contextLookup) {
+      entry.second.context->stop();
     }
   }
 
-  // Used by component manager to start run context
-  // with designated index
-  void startRunContext(std::uint32_t index) {
-    if (index >= _contextByIndex.size()) {
-      return;
-    }
-
-    auto result = _contextByIndex[index].context->start();
-    if (!result) {
-      stopAllThreads();
-      throw std::runtime_error(result.error());
-    }
-  }
-  // Used by component manager to provide access to particular
-  // run context specified by a component in it's configuration
-  auto &getAppRunContextWithRunParams(std::uint32_t index) {
-    return _contextByIndex[index];
-  }
-
-  // Used by component manager to provide access to particular
-  // run context specified by a component in it's configuration
   template <typename AppRunContextType>
   AppRunContextType &getAppRunContext(const std::string name) {
-    auto entry = _contextLookup.find(name);
-    if (entry == _contextLookup.end()) {
+    auto it = _contextLookup.find(name);
+    if (it == _contextLookup.end()) {
       throw std::runtime_error(
-          std::format("No run context configured with name {}", name));
+          std::format("No run context with name {}", name));
     }
-    auto entryPtr = dynamic_cast<AppRunContextType *>(entry->second.get());
-    if (entryPtr == nullptr) {
-      throw std::runtime_error(std::format(
-          "Run context configure with name {} is not of cast type", name));
+    auto context = dynamic_cast<AppRunContextType *>(it->second.context.get());
+    if (context == nullptr) {
+      throw std::runtime_error(
+          std::format("Run context {} is not of requested type", name));
     }
-
-    return *entryPtr;
+    return *context;
   }
 
-  std::uint32_t getThreadCount() { return _contextByIndex.size(); }
+  std::uint32_t getThreadCount() { return _contextLookup.size(); }
 
 private:
-  std::vector<ContextWithRunParams> _contextByIndex;
-  std::map<std::string, std::shared_ptr<IAppContext>> _contextLookup;
+  Expected set_thread_cpu_affinity(std::jthread::native_handle_type handle,
+                                   std::uint32_t cpu) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu, &cpuset);
+
+    int result = pthread_setaffinity_np(handle, sizeof(cpu_set_t), &cpuset);
+    if (result != 0) {
+      return std::unexpected(
+          std::format("pthread_setaffinity_np failed: {}", strerror(result)));
+    }
+    return {};
+  }
+
+  Expected set_thread_sched_policy(std::jthread::native_handle_type handle,
+                                   std::uint32_t policy,
+                                   std::uint32_t priority) {
+    struct sched_param param;
+    param.sched_priority = priority;
+
+    int result = pthread_setschedparam(handle, policy, &param);
+    if (result != 0) {
+      return std::unexpected(
+          std::format("pthread_setschedparam failed: {}", strerror(result)));
+    }
+    return {};
+  }
+
+  std::map<std::string, ContextWithRunParams> _contextLookup;
+  std::map<std::string, std::jthread> _threadsByName;
   ClockNowT _clock{};
+  ContextFactoryFunctionRegistry _contextFactoryRegistry;
 };
 
 } // namespace medici::application

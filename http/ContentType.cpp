@@ -1,6 +1,7 @@
 #include "ContentType.hpp"
 
 namespace medici::http {
+
 const char *to_string(ContentType state) {
   switch (state) {
   case ContentType::TextHtml:
@@ -77,6 +78,54 @@ const char *to_encoding_value(SupportedCompression compression) {
     break;
   }
   return ""; // No compression
+}
+
+ContentType getContentTypeFromFilePath(const std::string &filePath) {
+  auto dotPos = filePath.rfind('.');
+  if (dotPos == std::string::npos || dotPos == filePath.length() - 1) {
+    return ContentType::Unspecified;
+  }
+
+  std::string extension = filePath.substr(dotPos + 1);
+  if (extension == "html" || extension == "htm") {
+    return ContentType::TextHtml;
+  } else if (extension == "css") {
+    return ContentType::TextCSS;
+  } else if (extension == "csv") {
+    return ContentType::TextCSV;
+  } else if (extension == "txt") {
+    return ContentType::TextPlain;
+  } else if (extension == "js") {
+    return ContentType::AppJavascript;
+  } else if (extension == "json") {
+    return ContentType::AppJSON;
+  } else if (extension == "xml") {
+    return ContentType::AppXML;
+  } else if (extension == "png") {
+    return ContentType::ImagePNG;
+  } else if (extension == "jpg" || extension == "jpeg") {
+    return ContentType::ImageJPEG;
+  } else if (extension == "gif") {
+    return ContentType::ImageGIF;
+  } else if (extension == "bmp") {
+    return ContentType::ImageBMP;
+  } else if (extension == "ico") {
+    return ContentType::ImageICO;
+  } else if (extension == "tiff" || extension == "tif") {
+    return ContentType::ImageTIFF;
+  } else if (extension == "svg") {
+    return ContentType::ImageSVGXML;
+  } else if (extension == "gz") {
+    return ContentType::AppGZip;
+  } else if (extension == "mp4") {
+    return ContentType::VideoMP4;
+  } else if (extension == "flv") {
+    return ContentType::VideoFLV;
+  } else if (extension == "mpeg" || extension == "mpg") {
+    return ContentType::VideoMPEG;
+  }
+
+  return ContentType::Unspecified;
 }
 
 } // namespace medici::http

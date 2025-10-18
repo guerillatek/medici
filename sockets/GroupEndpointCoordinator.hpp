@@ -9,16 +9,13 @@
 
 namespace medici::sockets {
 
-struct DefaultCallbackContext {};
-
-template <typename EndpointT, typename CallbackContext = DefaultCallbackContext>
+template <typename EndpointT,
+          typename ExtendedContextData = NoExtendedContextData>
 class GroupEndpointCoordinator {
 public:
-  using DefaultContextT =
-      EndpointCallbackContext<EndpointT, GroupEndpointCoordinator<EndpointT>>;
-  using CallbackContextT = std::conditional_t<
-      std::is_same_v<DefaultCallbackContext, CallbackContext>, DefaultContextT,
-      EndpointCallbackContext<EndpointT, CallbackContext>>;
+  using CallbackContextT =
+      EndpointCallbackContext<EndpointT, GroupEndpointCoordinator<EndpointT>,
+                              ExtendedContextData>;
 
   using CallbackContextPtr = std::unique_ptr<CallbackContextT>;
   using EndpointContextLookup = std::unordered_map<int, CallbackContextPtr>;

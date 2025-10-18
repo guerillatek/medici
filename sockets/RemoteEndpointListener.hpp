@@ -6,7 +6,8 @@
 
 namespace medici::sockets {
 
-template <typename EndpointT, application::AppRunContextC ThreadRunContextT>
+template <typename EndpointT, application::IPAppRunContextC ThreadRunContextT,
+          typename ExtendedContextData = NoExtendedContextData>
 class RemoteEndpointListener {
 public:
   RemoteEndpointListener(ThreadRunContextT &threadRunContext,
@@ -38,11 +39,12 @@ public:
 
   template <typename SocketT>
   auto makeListenerEndpoint(const auto &listenerEndpointConfig,
-                              CloseHandlerT listenerCloseHandler,
-                              DisconnectedHandlerT listenerDisconnectHandler,
-                              OnActiveHandlerT listenerOnActiveHandler,
-                              auto &&listenerRegisterHandler) {
-    if constexpr (IsHttpServerEndpoint<SocketT> || IsWebSocketEndpoint<SocketT>) {
+                            CloseHandlerT listenerCloseHandler,
+                            DisconnectedHandlerT listenerDisconnectHandler,
+                            OnActiveHandlerT listenerOnActiveHandler,
+                            auto &&listenerRegisterHandler) {
+    if constexpr (IsHttpServerEndpoint<SocketT> ||
+                  IsWebSocketEndpoint<SocketT>) {
       return _threadRunContext.getSocketFactory().createHttpListenerEndpoint(
           listenerEndpointConfig, listenerCloseHandler,
           listenerDisconnectHandler, listenerOnActiveHandler,
@@ -69,9 +71,13 @@ public:
 
   auto &getEndpointCoordinator() { return _remoteEndpointCoordinator; }
 
-private:
-  using RemoteEndpointCoordinatorT = GroupEndpointCoordinator<EndpointT>;
+  using RemoteEndpointCoordinatorT =
+      GroupEndpointCoordinator<EndpointT, ExtendedContextData>;
 
+  using RemoteEndpointContextT =
+      typename RemoteEndpointCoordinatorT::CallbackContextT;
+
+private:
   ThreadRunContextT &_threadRunContext;
   IIPEndpointPtr _listenEndpoint;
   RemoteEndpointCoordinatorT _remoteEndpointCoordinator;

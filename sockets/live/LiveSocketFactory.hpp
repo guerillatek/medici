@@ -11,7 +11,6 @@
 #include "medici/sockets/live/TcpIpLiveListenEndpoints.hpp"
 #include "medici/sockets/live/WebSocketLiveEndpoint.hpp"
 #include <algorithm>
-#include <boost/test/unit_test.hpp>
 #include <format>
 #include <list>
 #include <memory>

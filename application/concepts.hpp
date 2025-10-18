@@ -13,7 +13,7 @@
 namespace medici::application {
 
 template <typename T>
-concept AppRunContextC = requires(T t) {
+concept IPAppRunContextC = requires(T t) {
   { t.getSocketFactory() } -> sockets::SocketFactoryC;
   { t.getEventQueue() } -> event_queue::EventQueueC;
   { t.getClock() } -> ClockNowC;

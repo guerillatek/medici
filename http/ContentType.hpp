@@ -58,6 +58,8 @@ inline std::ostream &operator<<(std::ostream &os,
   return os << to_string(compression);
 }
 
+ContentType getContentTypeFromFilePath(const std::string &filePath);
+
 } // namespace medici::http
 
 template <> struct std::formatter<medici::http::ContentType> {
