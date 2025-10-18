@@ -118,8 +118,8 @@ public:
     return this->getConnectionManager().getClock();
   }
 
-  int getEndpointUniqueId() const override {
-    return this->getConnectionManager().getSocketHandle();
+  std::uint64_t getEndpointUniqueId() const override {
+    return *reinterpret_cast<const std::uint64_t *>(this);
   }
 
 protected:

@@ -69,11 +69,14 @@ public:
     }
   }
 
+  auto getCreationTime() const { return _createTime; }
+
 private:
   IPEndpointConfig _config;
   IIPEndpointPollManager &_endPointPollManager;
   IEndpointEventDispatch &_endPointDispatch;
   ConnectionType _connectionType;
+  TimePoint _createTime;
   int _fd;
   int _fdRegistrations{0};
 };

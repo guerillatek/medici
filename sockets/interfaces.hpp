@@ -29,7 +29,7 @@ public:
   virtual Expected closeEndpoint(const std::string &reason = "") = 0;
   virtual bool isActive() const = 0;
   virtual const medici::ClockNowT &getClock() const = 0;
-  virtual int getEndpointUniqueId() const = 0;
+  virtual std::uint64_t getEndpointUniqueId() const = 0;
   virtual IEndpointEventDispatch &getDispatchInterface() = 0;
   virtual ~IIPEndpoint() = default;
 };

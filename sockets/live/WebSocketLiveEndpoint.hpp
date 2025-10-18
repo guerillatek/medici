@@ -101,7 +101,7 @@ public:
     return BaseSocketEndpointT::getClock();
   }
 
-  int getEndpointUniqueId() const override {
+  std::uint64_t getEndpointUniqueId() const override {
     return BaseSocketEndpointT::getEndpointUniqueId();
   }
 

@@ -17,6 +17,7 @@ enum class ContentType {
   AppJavascript,
   AppJSON,
   AppXML,
+  AppPDF,
   VideoFLV,
   VideoMPEG,
   VideoMP4,

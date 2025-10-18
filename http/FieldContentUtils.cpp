@@ -14,15 +14,14 @@ static std::regex SpecialCharHexVal(R"(\%[0-9A-F][0-9A-F])");
 static std::regex Equal(R"(\=)");
 static std::regex Ampersand(R"(\&)");
 
-FieldValueMap
-FieldContentUtils::parseURLEncodingToFields(std::string content) {
+FieldValueMap FieldContentUtils::parseURLEncodingToFields(std::string content) {
   std::string fieldName;
   std::string fieldValue;
   bool scanningField = true;
   FieldValueMap fieldValueMap;
 
   while (!content.empty()) {
-    auto matchFunction = [](std::string& content,
+    auto matchFunction = [](std::string &content,
                             std::regex &expression) -> std::string {
       std::smatch match;
       regex_search(content, match, expression);
@@ -114,6 +113,32 @@ std::string FieldContentUtils::encodeStringForURL(const std::string &str) {
   return encodedString.str();
 }
 
+std::string FieldContentUtils::decodeStringFromURL(const std::string &str) {
+  std::ostringstream decodedString;
+  size_t i = 0;
+  while (i < str.length()) {
+    if (str[i] == '%') {
+      if (i + 2 < str.length()) {
+        std::string hexValue = str.substr(i + 1, 2);
+        char decodedChar = static_cast<char>(std::stoi(hexValue, nullptr, 16));
+        decodedString << decodedChar;
+        i += 3;
+      } else {
+        // Invalid encoding, append '%' and move on
+        decodedString << '%';
+        i++;
+      }
+    } else if (str[i] == '+') {
+      decodedString << ' ';
+      i++;
+    } else {
+      decodedString << str[i];
+      i++;
+    }
+  }
+  return decodedString.str();
+}
+
 ExpectedValue
 FieldContentUtils::encodeFieldsToURL(const FieldValueMap &values) {
   std::ostringstream encodedURL;
@@ -191,7 +216,8 @@ bool operator==(const FieldValueMap &lhs, const FieldValueMap &rhs) {
       return false;
     }
     if (!lhsIter->second.isFilePath) {
-      //We only compare values if they are not file paths (since paths may differ across systems)
+      // We only compare values if they are not file paths (since paths may
+      // differ across systems)
       if (lhsIter->second.value != rhsIter->second.value) {
         return false;
       }

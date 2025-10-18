@@ -52,9 +52,8 @@ public:
       if (auto result = _connectionManager.registerWithEpoll(); !result) {
         throw std::runtime_error(result.error());
       }
-      if (auto result = this->onActive(); !result) {
-        throw std::runtime_error(result.error());
-      }
+      endpointPollManager.getEventQueue().postAction(
+          [this]() { return this->onActive(); });
     }
   }
 

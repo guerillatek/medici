@@ -22,6 +22,8 @@ const char *to_string(ContentType state) {
     return "application/json";
   case ContentType::AppXML:
     return "application/xml";
+  case ContentType::AppPDF:
+    return "application/pdf";
   case ContentType::VideoFLV:
     return "video/x-flv";
   case ContentType::VideoMPEG:
@@ -99,6 +101,8 @@ ContentType getContentTypeFromFilePath(const std::string &filePath) {
     return ContentType::AppJavascript;
   } else if (extension == "json") {
     return ContentType::AppJSON;
+  } else if (extension == "pdf") {
+    return ContentType::AppPDF;
   } else if (extension == "xml") {
     return ContentType::AppXML;
   } else if (extension == "png") {

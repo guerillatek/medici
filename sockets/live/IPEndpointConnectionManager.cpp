@@ -16,7 +16,8 @@ IPEndpointConnectionManager::IPEndpointConnectionManager(
     const IPEndpointConfig &config, IIPEndpointPollManager &endPointPollManager,
     IEndpointEventDispatch &endPointDispatch, ConnectionType connectionType)
     : _config{config}, _endPointPollManager{endPointPollManager},
-      _endPointDispatch{endPointDispatch}, _connectionType{connectionType} {}
+      _endPointDispatch{endPointDispatch}, _connectionType{connectionType},
+      _createTime{endPointPollManager.getClock()()} {}
 
 IPEndpointConnectionManager::IPEndpointConnectionManager(
     const IPEndpointConfig &config, int fd,
@@ -25,7 +26,7 @@ IPEndpointConnectionManager::IPEndpointConnectionManager(
     std::function<Expected()> onActive)
     : _config{config}, _endPointPollManager{endPointPollManager},
       _endPointDispatch{endPointDispatch}, _connectionType{connectionType},
-      _fd{fd} {
+      _createTime{endPointPollManager.getClock()()}, _fd{fd} {
 
   int flag = 1;
   if (setsockopt(_fd, IPPROTO_TCP, SO_KEEPALIVE, (char *)&flag, sizeof(int)) <

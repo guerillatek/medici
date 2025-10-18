@@ -265,6 +265,8 @@ public:
     while (_activeThreadId && result) {
       result = runEventCycle();
       if (!result) {
+        std::cerr << "Event queue encountered error: "
+                  << result.error() << std::endl;
         return result;
       }
     }

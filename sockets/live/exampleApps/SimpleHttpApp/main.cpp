@@ -23,6 +23,12 @@ std::string getUserHomeDirectory() {
   return std::filesystem::current_path().string();
 }
 
+
+
+
+
+
+
 int main() {
   using namespace medici;
 
@@ -62,7 +68,7 @@ int main() {
   HttpServerHandlerT httpServerHandler{
       runContext, getUserHomeDirectory(),
       sockets::HttpEndpointConfig{"SimpleHttpServer", "127.0.0.1", 8443,
-                                  "/files"}};
+                                  "/files/"}};
 
   runContext.getEventQueue().postAction([&httpServerHandler]() {
     if (auto result = httpServerHandler.start(); !result) {

@@ -75,7 +75,24 @@ public:
 
 protected:
   http::SupportedCompression
-  getAcceptedCompression(const http::HttpFields &requestHeaders) {
+  getAcceptedCompression(http::ContentType contentType,
+                         const http::HttpFields &requestHeaders) {
+    // Determine if content type is worth compressing
+    switch (contentType) {
+    case http::ContentType::ImageJPEG:
+    case http::ContentType::ImagePNG:
+    case http::ContentType::ImageGIF:
+    case http::ContentType::ImageBMP:
+    case http::ContentType::ImageTIFF:
+    case http::ContentType::VideoFLV:
+    case http::ContentType::VideoMPEG:
+    case http::ContentType::VideoMP4:
+    case http::ContentType::AppGZip:
+      return http::SupportedCompression::None;
+    default:
+      break;
+    };
+
     if (requestHeaders.HasField("Accept-Encoding")) {
       auto acceptEncoding = requestHeaders.getField("Accept-Encoding").value();
       if (acceptEncoding.find("gzip") != std::string::npos) {
@@ -93,19 +110,29 @@ protected:
                                 const http::HttpFields &requestHeaders,
                                 TimePoint tp,
                                 RemoteEndpointContextT &remoteEndpointContext) {
-    std::string listingHtml = "<html><body><h1>Directory Listing</h1><ul>";
+    auto directoryHeader = directoryPath.substr(_baseFilePath.length());
+    auto listingHtml =
+        std::format("<html><body><h1>{}</h1><ul>", directoryHeader);
+
+    // Add parent directory link
+    listingHtml += "<li><a href=\"../\">[Parent Directory]</a></li>";
 
     for (const auto &entry :
          std::filesystem::directory_iterator(directoryPath)) {
-      listingHtml += "<li><a href=\"" + entry.path().filename().string() +
-                     "\">" + entry.path().filename().string() + "</a></li>";
+      std::string filename = entry.path().filename().string();
+      std::string href = filename;
+      if (entry.is_directory()) {
+        href += "/";
+        filename += "/";
+      }
+      listingHtml += "<li><a href=\"" + href + "\">" + filename + "</a></li>";
     }
 
     listingHtml += "</ul></body></html>";
 
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
-        http::HttpFields{}, 200, listingHtml, "OK", http::ContentType::TextHtml,
-        getAcceptedCompression(requestHeaders));
+        http::HttpFields{}, 200, "OK", listingHtml, http::ContentType::TextHtml,
+        getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
   }
 
 private:
@@ -122,6 +149,24 @@ private:
     return {};
   }
 
+  Expected sendFileAsDownload(const std::string &filePath,
+                              const http::HttpFields &requestHeaders,
+                              TimePoint tp,
+                              RemoteEndpointContextT &remoteEndpointContext) {
+
+    // Create headers for download
+    http::HttpFields responseHeaders;
+    auto fileName = std::filesystem::path{filePath}.filename().string();
+    responseHeaders.addFieldValue(
+        "Content-Disposition",
+        std::format("attachment; filename=\"{}\"", fileName));
+
+    return remoteEndpointContext.getEndpoint().sendFileResponse(
+        responseHeaders, 200, "OK", filePath,
+        http::ContentType::AppBinary,      // Force binary type
+        http::SupportedCompression::None); // Don't compress downloads
+  }
+
   virtual Expected
   handleFileRequest(const std::string &filePath,
                     const http::HttpFields &requestHeaders, TimePoint tp,
@@ -132,15 +177,15 @@ private:
                                   remoteEndpointContext);
     }
 
+    auto contentType = http::getContentTypeFromFilePath(filePath);
     auto sendResult = remoteEndpointContext.getEndpoint().sendFileResponse(
-        requestHeaders, 200, "OK", filePath,
-        http::getContentTypeFromFilePath(filePath),
-        getAcceptedCompression(requestHeaders));
+        requestHeaders, 200, "OK", filePath, contentType,
+        getAcceptedCompression(contentType, requestHeaders));
 
     if (sendResult) {
       return {};
     }
-    
+
     auto responseHtml = std::format(
         "<html><body><h1>Error sending file '{}'</h1><p>{}</p></body></html>",
         filePath, sendResult.error());
@@ -160,8 +205,8 @@ private:
         (uriPath.find(_listenEndpointConfig.uriPath()) == 0)) {
       // Handle file requests
       std::string filePath =
-          _baseFilePath +
-          uriPath.substr(_listenEndpointConfig.uriPath().length());
+          _baseFilePath + "/" +
+          http::FieldContentUtils::decodeStringFromURL(uriPath.substr(_listenEndpointConfig.uriPath().length()));
       return handleFileRequest(filePath, requestHeaders, tp,
                                remoteEndpointContext);
     } else {
@@ -181,7 +226,7 @@ private:
         "<html><body><h1>404 Not Found</h1><p>The requested resource was not "
         "found on this server.</p></body></html>",
         "Not Found", http::ContentType::TextHtml,
-        getAcceptedCompression(requestHeaders));
+        getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
   }
 
   virtual Expected

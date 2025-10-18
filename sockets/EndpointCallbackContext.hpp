@@ -171,18 +171,23 @@ public:
                                   const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return closeHandler(reason, endpointConfig);
+              auto result = closeHandler(reason, endpointConfig);
+              this->_endPointCoordinator.removeEndpoint(
+                  _endpoint.getEndpointUniqueId());
+              return result;
             },
             [this, &disconnectedHandler](
                 const auto &reason, const IPEndpointConfig &endpointConfig) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason, endpointConfig);
-            },
-            [this, &onActiveHandler]() {
-              this->_endPointCoordinator.setActiveEndpoint(
+              auto result = disconnectedHandler(reason, endpointConfig);
+              this->_endPointCoordinator.removeEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return onActiveHandler();
+              return result;
+            },
+            [this, &onActiveHandler, &endpointPollManager]() {
+              return endpointPollManager.getEventQueue().postAction(
+                  [this, &onActiveHandler]() { return onActiveHandler(); });
             }} {}
 
   auto &getEndpoint() const { return _endpoint; }

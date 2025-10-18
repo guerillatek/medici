@@ -7,8 +7,9 @@ namespace medici::http {
 
 Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
                          int windowBits) {
-  z_stream strm = {};
+  // Validate windowBits parameter for RFC 7692
 
+  z_stream strm = {};
   // RFC 7692 requires raw DEFLATE format (negative windowBits)
   // window_bits_ can be negotiated between 8-15
   int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
@@ -17,7 +18,21 @@ Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
                          Z_DEFAULT_STRATEGY);
 
   if (ret != Z_OK) {
-    throw std::runtime_error("Failed to initialize DEFLATE");
+    std::string error_msg;
+    switch (ret) {
+      case Z_MEM_ERROR:
+        error_msg = "Insufficient memory for DEFLATE initialization";
+        break;
+      case Z_STREAM_ERROR:
+        error_msg = std::format("Invalid DEFLATE parameters: windowBits={}", windowBits);
+        break;
+      case Z_VERSION_ERROR:
+        error_msg = "Zlib version mismatch";
+        break;
+      default:
+        error_msg = std::format("DEFLATE initialization failed with code: {}", ret);
+    }
+    return std::unexpected(error_msg);
   }
 
   output.resize(input.size() + 32);
@@ -124,10 +139,24 @@ Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
   }
 
   z_stream strm = {};
-  int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -windowBits,
+  int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, windowBits,
                          8, Z_DEFAULT_STRATEGY);
   if (ret != Z_OK) {
-    return std::unexpected("Failed to initialize DEFLATE");
+    std::string error_msg;
+    switch (ret) {
+      case Z_MEM_ERROR:
+        error_msg = "Insufficient memory for DEFLATE initialization";
+        break;
+      case Z_STREAM_ERROR:
+        error_msg = std::format("Invalid DEFLATE parameters: windowBits={}", windowBits);
+        break;
+      case Z_VERSION_ERROR:
+        error_msg = "Zlib version mismatch";
+        break;
+      default:
+        error_msg = std::format("DEFLATE initialization failed with code: {}", ret);
+    }
+    return std::unexpected(error_msg);
   }
 
   output.clear();

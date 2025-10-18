@@ -405,9 +405,13 @@ public:
     return this->getConnectionManager().getClock();
   }
 
-  int getEndpointUniqueId() const override {
-    return this->getConnectionManager().getSocketHandle();
+  std::uint64_t getEndpointUniqueId() const override {
+    return EndpointBaseT::getConnectionManager()
+        .getCreationTime()
+        .time_since_epoch()
+        .count();
   }
+  
   IEndpointEventDispatch &getDispatchInterface() override { return *this; }
 
 protected:

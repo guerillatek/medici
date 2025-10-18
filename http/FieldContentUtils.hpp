@@ -36,6 +36,7 @@ public:
   encodeFieldsToResponseHeader(int responseCode, const std::string &message,
                                const FieldValueMap &values);
   static std::string encodeStringForURL(const std::string &str);
+  static std::string decodeStringFromURL(const std::string &str);
 
 private:
   static Expected loadHeaderValues(std::ostringstream &contentHeader,
