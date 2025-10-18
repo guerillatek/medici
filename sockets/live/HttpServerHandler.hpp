@@ -73,6 +73,8 @@ public:
 
   Expected start() { return _serverEndpointListener.start(); }
 
+  auto &getListenEndpointConfig() const { return _listenEndpointConfig; }
+
 protected:
   http::SupportedCompression
   getAcceptedCompression(http::ContentType contentType,
@@ -206,7 +208,8 @@ private:
       // Handle file requests
       std::string filePath =
           _baseFilePath + "/" +
-          http::FieldContentUtils::decodeStringFromURL(uriPath.substr(_listenEndpointConfig.uriPath().length()));
+          http::FieldContentUtils::decodeStringFromURL(
+              uriPath.substr(_listenEndpointConfig.uriPath().length()));
       return handleFileRequest(filePath, requestHeaders, tp,
                                remoteEndpointContext);
     } else {

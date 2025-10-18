@@ -23,12 +23,6 @@ std::string getUserHomeDirectory() {
   return std::filesystem::current_path().string();
 }
 
-
-
-
-
-
-
 int main() {
   using namespace medici;
 
@@ -76,6 +70,11 @@ int main() {
                 << "\n";
     } else {
       std::cout << "HTTP server handler started successfully\n";
+      std::cout << "Navigate to http://"
+                << httpServerHandler.getListenEndpointConfig().host() << ":"
+                << httpServerHandler.getListenEndpointConfig().port()
+                << httpServerHandler.getListenEndpointConfig().uriPath()
+                << " to access the server\n";
     }
     return Expected{};
   });
