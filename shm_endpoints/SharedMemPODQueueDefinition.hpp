@@ -16,13 +16,13 @@
 #include <vector>
 
 // This is a multichannel interprocess queue for POD
-// types. It uses Boost.Interprocess for shared memory management and c++ atomic
-// operations for synchronization. The queue supports a fixed number of
-// channels, each with its own SPSC queue (Ring Buffer) with flexible back
-// pressure handling options. Each message is tagged with a type index to allow
-// for multiple POD message types to be sent through the same queue. Support for
-// more sophisticated message serialization can be trivially be added by
-// defining POD types that can contain the serialized data.
+// types. It uses the SharedMemoryObjectManager template for shared memory
+// management and c++ atomic operations for synchronization. The queue supports
+// a fixed number of channels, each with its own SPSC queue (Ring Buffer) with
+// Each message is tagged with a type index to allow for multiple POD message
+// types to be sent through the same queue. Support for more sophisticated
+// message serialization can be trivially be added by defining POD types that
+// can contain the serialized data.
 
 namespace medici::shm_endpoints {
 
