@@ -13,13 +13,16 @@ class IEndpointEventDispatch {
 public:
   virtual Expected onActive() = 0;
   virtual Expected onPayloadReady(TimePoint readTime) = 0;
-  virtual Expected onDisconnected(const std::string &reason, const medici::sockets::IPEndpointConfig&) = 0;
+  virtual Expected onDisconnected(const std::string &reason) = 0;
   virtual Expected onShutdown() = 0;
   virtual Expected registerTimer(const timers::IEndPointTimerPtr &timer) = 0;
 };
 
 using Expected = std::expected<void, std::string>;
 using ExpectedEventsCount = std::expected<int, std::string>;
+using OnActiveHandlerT = std::function<Expected()>;
+using CloseHandlerT = std::function<Expected(const std::string &)>;
+using DisconnectedHandlerT = CloseHandlerT;
 
 template <typename T>
 concept EndpointEventPollMgrC = requires(T t) {

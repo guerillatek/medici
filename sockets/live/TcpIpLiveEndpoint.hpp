@@ -71,8 +71,7 @@ public:
     if (auto result = closeRemoteConnection(); !result) {
       return result;
     }
-    if (auto result =
-            this->getEventHandlers().onCloseEndpoint(reason, this->getConfig());
+    if (auto result = this->getEventHandlers().onCloseEndpoint(reason);
         !result) {
       return result;
     }
@@ -94,12 +93,10 @@ public:
     }
     auto bytesSentResult = this->getConnectionManager().send(payload);
     if (!bytesSentResult) {
-      return this->onDisconnected(
-          std::format(
-              "No bytes sent to {}\n TCP connection appears to have dropped "
-              "connection",
-              this->getConfig().name()),
-          this->getConfig());
+      return this->onDisconnected(std::format(
+          "No bytes sent to {}\n TCP connection appears to have dropped "
+          "connection",
+          this->getConfig().name()));
     }
     return {};
   }
@@ -170,7 +167,7 @@ public:
       if (!this->getConnectionManager().isConnected()) {
         return {};
       }
-      return onDisconnected(strerror(errno), this->getConfig());
+      return onDisconnected(strerror(errno));
     }
     return this->getEventHandlers().onPayloadRead(
         std::string_view{this->getInboundBuffer().data(),
@@ -179,17 +176,14 @@ public:
         readTime);
   }
 
-  Expected onDisconnected(const std::string &reason,
-                          const IPEndpointConfig &endpointConfig) {
+  Expected onDisconnected(const std::string &reason) {
     resetConnection();
-    return this->getEventHandlers().onDisconnected(reason, endpointConfig);
+    return this->getEventHandlers().onDisconnected(reason);
   }
 
   Expected onShutdown() {
-    return this->getEventHandlers().onCloseEndpoint(
-        std::format("Shutdown called, closing endpoint name={}",
-                    this->getConfig().name()),
-        this->getConfig());
+    return this->getEventHandlers().onCloseEndpoint(std::format(
+        "Shutdown called, closing endpoint name={}", this->getConfig().name()));
   }
 
   const medici::ClockNowT &getClock() const override {

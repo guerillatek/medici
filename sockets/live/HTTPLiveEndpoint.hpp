@@ -262,7 +262,7 @@ protected:
             }
             content = encodedForm;
             headersValues.addFieldValue("Content-Length",
-                                          std::to_string(encodedForm.size()));
+                                        std::to_string(encodedForm.size()));
             return {};
           } else if constexpr (std::is_same_v<T, std::filesystem::path>) {
 
@@ -689,11 +689,9 @@ protected:
     }
   }
 
-  Expected onDisconnected(
-      const std::string &reason,
-      const medici::sockets::IPEndpointConfig &endpointConfig) override {
+  Expected onDisconnected(const std::string &reason) override {
     resetIncomingHttpState();
-    return BaseSocketEndpointT::onDisconnected(reason, endpointConfig);
+    return BaseSocketEndpointT::onDisconnected(reason);
   }
 
   void resetIncomingHttpState() {

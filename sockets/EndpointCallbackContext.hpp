@@ -39,37 +39,34 @@ public:
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
                                     CoordinatorT>{endPointCoordinator, config},
-        _endpoint{
-            std::forward<ArgsT>(args)...,
-            config,
-            endpointPollManager,
-            [this, &incomingPayloadHandler](auto payload, auto tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return incomingPayloadHandler(payload, tp);
-            },
-            [this, &outgoingPayloadHandler](auto payload, auto tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return outgoingPayloadHandler(payload, tp);
-            },
-            [this, &closeHandler](const std::string &reason,
-                                  const IPEndpointConfig &endpointConfig) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return closeHandler(reason, endpointConfig);
-            },
-            [this, &disconnectedHandler](
-                const auto &reason, const IPEndpointConfig &endpointConfig) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason, endpointConfig);
-            },
-            [this, &onActiveHandler]() {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return onActiveHandler();
-            }} {}
+        _endpoint{std::forward<ArgsT>(args)...,
+                  config,
+                  endpointPollManager,
+                  [this, &incomingPayloadHandler](auto payload, auto tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return incomingPayloadHandler(payload, tp);
+                  },
+                  [this, &outgoingPayloadHandler](auto payload, auto tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return outgoingPayloadHandler(payload, tp);
+                  },
+                  [this, &closeHandler](const std::string &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return closeHandler(reason);
+                  },
+                  [this, &disconnectedHandler](const auto &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return disconnectedHandler(reason);
+                  },
+                  [this, &onActiveHandler]() {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return onActiveHandler();
+                  }} {}
 
   auto &getEndpoint() const { return _endpoint; }
   auto &getEndpoint() { return _endpoint; }
@@ -108,11 +105,10 @@ public:
                   _endpoint.getEndpointUniqueId());
               return outgoingPayloadHandler(payload, tp);
             },
-            [this, &closeHandler](const std::string &reason,
-                                  const IPEndpointConfig &endpointConfig) {
+            [this, &closeHandler](const std::string &reason) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              return closeHandler(reason, endpointConfig);
+              return closeHandler(reason);
             },
             [this, &disconnectedHandler](
                 const auto &reason, const IPEndpointConfig &endpointConfig) {
@@ -167,23 +163,15 @@ public:
                   _endpoint.getEndpointUniqueId());
               return outgoingPayloadHandler(payload, tp);
             },
-            [this, &closeHandler](const std::string &reason,
-                                  const IPEndpointConfig &endpointConfig) {
+            [this, &closeHandler](const std::string &reason) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              auto result = closeHandler(reason, endpointConfig);
-              this->_endPointCoordinator.removeEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return result;
+              return closeHandler(reason);
             },
-            [this, &disconnectedHandler](
-                const auto &reason, const IPEndpointConfig &endpointConfig) {
+            [this, &disconnectedHandler](const auto &reason) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
-              auto result = disconnectedHandler(reason, endpointConfig);
-              this->_endPointCoordinator.removeEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return result;
+              return disconnectedHandler(reason);
             },
             [this, &onActiveHandler, &endpointPollManager]() {
               return endpointPollManager.getEventQueue().postAction(
@@ -212,41 +200,38 @@ public:
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
                                     CoordinatorT>{endPointCoordinator, config},
-        _endpoint{
-            std::forward<ArgsT>(args)...,
-            config,
-            endpointPollManager,
-            [this, &incomingPayloadHandler](std::string_view payload,
-                                            WSOpCode opCode,
-                                            medici::TimePoint tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return incomingPayloadHandler(payload, opCode, tp);
-            },
-            [this, &outgoingPayloadHandler](std::string_view payload,
-                                            WSOpCode opCode,
-                                            medici::TimePoint tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return outgoingPayloadHandler(payload, opCode, tp);
-            },
-            [this, &closeHandler](const std::string &reason,
-                                  const IPEndpointConfig &endpointConfig) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return closeHandler(reason, endpointConfig);
-            },
-            [this, &disconnectedHandler](
-                const auto &reason, const IPEndpointConfig &endpointConfig) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason, endpointConfig);
-            },
-            [this, &onActiveHandler]() {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return onActiveHandler();
-            }} {}
+        _endpoint{std::forward<ArgsT>(args)...,
+                  config,
+                  endpointPollManager,
+                  [this, &incomingPayloadHandler](std::string_view payload,
+                                                  WSOpCode opCode,
+                                                  medici::TimePoint tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return incomingPayloadHandler(payload, opCode, tp);
+                  },
+                  [this, &outgoingPayloadHandler](std::string_view payload,
+                                                  WSOpCode opCode,
+                                                  medici::TimePoint tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return outgoingPayloadHandler(payload, opCode, tp);
+                  },
+                  [this, &closeHandler](const std::string &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return closeHandler(reason);
+                  },
+                  [this, &disconnectedHandler](const auto &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return disconnectedHandler(reason);
+                  },
+                  [this, &onActiveHandler]() {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return onActiveHandler();
+                  }} {}
 
   auto &getEndpoint() const { return _endpoint; }
   auto &getEndpoint() { return _endpoint; }

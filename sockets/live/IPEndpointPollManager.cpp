@@ -213,8 +213,8 @@ ExpectedEventsCount IPEndpointPollManager::pollAndDispatchEndpointsEvents() {
 
         if (result == -1) {
           if (errno == EBADF) {
-            auto result = endpoint.dispatch.onDisconnected(
-                "Connection dropped", endpoint.config);
+            auto result =
+                endpoint.dispatch.onDisconnected("Connection dropped");
             if (!result) {
               return std::unexpected(result.error());
             }
@@ -243,8 +243,8 @@ ExpectedEventsCount IPEndpointPollManager::pollAndDispatchEndpointsEvents() {
         reinterpret_cast<RegisteredEndpointEntry *>(event.data.ptr);
     if (event.events & (EPOLLRDHUP | EPOLLERR | EPOLLHUP)) {
       // Handle disconnect
-      auto disconnectResult = registeredEndpoint->dispatch.onDisconnected(
-          "Connection dropped", registeredEndpoint->config);
+      auto disconnectResult =
+          registeredEndpoint->dispatch.onDisconnected("Connection dropped");
       if (!disconnectResult) {
         return std::unexpected(disconnectResult.error());
       }

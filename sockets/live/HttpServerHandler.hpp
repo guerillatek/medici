@@ -27,12 +27,10 @@ public:
       : _serverEndpointListener{
             serverThreadContext,
             listenEndpoint,
-            [this](const std::string &reason,
-                   const sockets::IPEndpointConfig &) {
+            [this](const std::string &reason) {
               return handleClosedListener(reason, _listenEndpointConfig);
             },
-            [this](const std::string &reason,
-                   const sockets::IPEndpointConfig &) {
+            [this](const std::string &reason) {
               return handleDisconnectedListener(reason, _listenEndpointConfig);
             },
             [this]() { return handleListenerActive(); },
@@ -50,19 +48,27 @@ public:
                   _serverEndpointListener.getEndpointCoordinator()
                       .getActiveContext());
             },
-            [this](const std::string &reason,
-                   const sockets::IPEndpointConfig &endpointConfig) {
-              return handleClosedRemoteListener(
-                  reason, endpointConfig,
-                  _serverEndpointListener.getEndpointCoordinator()
-                      .getActiveContext());
+            [this](const std::string &reason) {
+              auto &endpointCoordinator =
+                  _serverEndpointListener.getEndpointCoordinator();
+              auto result = handleClosedRemoteListener(
+                  reason, endpointCoordinator.getActiveContext());
+              endpointCoordinator.removeEndpoint(
+                  endpointCoordinator.getActiveContext()
+                      .getEndpoint()
+                      .getEndpointUniqueId());
+              return result;
             },
-            [this](const std::string &reason,
-                   const sockets::IPEndpointConfig &endpointConfig) {
-              return handleDisconnectedRemoteListener(
-                  reason, endpointConfig,
-                  _serverEndpointListener.getEndpointCoordinator()
-                      .getActiveContext());
+            [this](const std::string &reason) {
+              auto &endpointCoordinator =
+                  _serverEndpointListener.getEndpointCoordinator();
+              auto result = handleDisconnectedRemoteListener(
+                  reason, endpointCoordinator.getActiveContext());
+              endpointCoordinator.removeEndpoint(
+                  endpointCoordinator.getActiveContext()
+                      .getEndpoint()
+                      .getEndpointUniqueId());
+              return result;
             },
             [this]() {
               return handleRemoteListenerActive(
@@ -240,13 +246,13 @@ private:
 
   virtual Expected
   handleClosedRemoteListener(const std::string &reason,
-                             const IPEndpointConfig &endpoint,
+
                              RemoteEndpointContextT &remoteEndpointContext) {
     return {};
   }
 
   virtual Expected handleDisconnectedRemoteListener(
-      const std::string &reason, const IPEndpointConfig &endpoint,
+      const std::string &reason,
       RemoteEndpointContextT &remoteEndpointContext) {
     return {};
   }

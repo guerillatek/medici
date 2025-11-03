@@ -181,8 +181,7 @@ public:
           this->getConfig().name()));
     }
 
-    if (auto result =
-            this->getEventHandlers().onCloseEndpoint(reason, this->getConfig());
+    if (auto result = this->getEventHandlers().onCloseEndpoint(reason);
         !result) {
       return result;
     }
@@ -218,8 +217,7 @@ public:
                                     std::size(payload) - offset);
       if (bytesWritten == 0) [[unlikely]] {
         return onDisconnected("No bytes written on ssl read ... server likely "
-                              "dropped connection",
-                              this->getConfig());
+                              "dropped connection");
       }
       offset += bytesWritten;
       if (offset < std::size(payload))
@@ -277,8 +275,7 @@ public:
     if (bytesWritten < 0) {
       auto result =
           onDisconnected("No bytes written on ssl read ... server likely "
-                         "dropped connection",
-                         this->getConfig());
+                         "dropped connection");
       if (!result) {
         return std::unexpected(result.error());
       }
@@ -309,8 +306,7 @@ public:
           _sslState = SSLState::Disconnected;
           return onDisconnected(
               "No bytes read on ssl read ... remote connection "
-              "dropped connection",
-              this->getConfig());
+              "dropped connection");
         }
 
         // BIO *bio = BIO_new_fp(stdout, BIO_NOCLOSE);// Use stdout for output
@@ -377,12 +373,10 @@ public:
         "SSL_read_ex failed on endpoint, name={}, host={}, port={}, msg={}",
         this->getConfig().name(), this->getConfig().host(),
         this->getConfig().port(), errorMessage);
-    return onDisconnected(message, this->getConfig());
+    return onDisconnected(message);
   }
 
-  Expected onDisconnected(
-      const std::string &reason,
-      const medici::sockets::IPEndpointConfig &endpointConfig) override {
+  Expected onDisconnected(const std::string &reason) override {
     auto result = resetConnection();
     if (!result) {
       if (!result) {
@@ -393,7 +387,7 @@ public:
       }
     }
 
-    return this->getEventHandlers().onDisconnected(reason, endpointConfig);
+    return this->getEventHandlers().onDisconnected(reason);
   }
 
   Expected onShutdown() {
@@ -411,7 +405,7 @@ public:
         .time_since_epoch()
         .count();
   }
-  
+
   IEndpointEventDispatch &getDispatchInterface() override { return *this; }
 
 protected:

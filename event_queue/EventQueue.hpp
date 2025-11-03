@@ -98,7 +98,7 @@ private:
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
 };
 
-template <EndpointEventPollMgrC EndpointEventPollMgrT, ClockNowC ClockT,
+template <typename EndpointEventPollMgrT, ClockNowC ClockT,
           std::uint32_t PayloadSize = 1024,
           std::uint32_t MaxProducerQueueSize = 1024 * 64>
 class EventQueue : public IEventQueue {

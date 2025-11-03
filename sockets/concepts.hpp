@@ -17,7 +17,6 @@
 
 namespace medici::sockets {
 
-using OnActiveHandlerT = std::function<sockets::Expected()>;
 using SocketPayloadHandlerT =
     std::function<sockets::Expected((std::string_view, TimePoint))>;
 
@@ -33,9 +32,6 @@ using HttpServerPayloadHandlerT = std::function<sockets::Expected(
 
 using WebSocketPayloadHandlerT =
     std::function<sockets::Expected((std::string_view, WSOpCode, TimePoint))>;
-using CloseHandlerT = std::function<sockets::Expected(
-    const std::string &, const IPEndpointConfig &)>;
-using DisconnectedHandlerT = CloseHandlerT;
 
 using SourceEndpointPollMangerT = std::function<IIPEndpointPollManager &()>;
 

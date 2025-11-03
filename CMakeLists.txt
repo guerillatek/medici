@@ -20,4 +20,5 @@ add_subdirectory(tests)
 add_subdirectory(sockets)
 add_subdirectory(http)
 add_subdirectory(cryptoUtils)
+add_subdirectory(shm_endpoints)
 

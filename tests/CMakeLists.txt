@@ -5,7 +5,6 @@ main.cpp
 EventQueueTests.cpp)
 
 target_include_directories(MediciEventQueueTests PRIVATE ../..)
-target_include_directories(MediciEventQueueTests PRIVATE ../../ts-core/core/cpp)
 
 set_target_properties(MediciEventQueueTests PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY  ${CMAKE_CURRENT_BINARY_DIR}/tests)

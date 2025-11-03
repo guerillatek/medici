@@ -26,7 +26,7 @@ struct WSClientServerTestHarness : ServerClientTestHarness {
   RemoteListener remoteListener{
       *(ServerClientTestHarness::serverThreadContext),
       ServerClientTestHarness::listenEndpoint,
-      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
+      [this](const std::string &reason) {
         BOOST_TEST_MESSAGE(std::format(" {} Listener Closing: reason={}",
                                        endpointType, reason));
         return serverThreadContext->stop();
@@ -42,8 +42,7 @@ struct WSClientServerTestHarness : ServerClientTestHarness {
       [this](std::string_view payload, medici::sockets::WSOpCode,
              medici::TimePoint) { return Expected{}; },
       clientCloseHandler,
-      [this](const std::string &reason,
-             const sockets::IPEndpointConfig &endpointConfig) {
+      [this](const std::string &reason) {
         BOOST_TEST_MESSAGE(std::format(" {} client disconnected: reason={}",
                                        endpointType, reason));
         return remoteListener.stop("Ending Test");
@@ -99,8 +98,7 @@ struct WSClientServerTestHarness : ServerClientTestHarness {
               clientOutgoingPayload = payload;
               return medici::Expected{};
             },
-            [this](const std::string &reason,
-                   const medici::sockets::IPEndpointConfig &) {
+            [this](const std::string &reason) {
               BOOST_TEST_MESSAGE(
                   std::format("Closing client: reason={}", reason));
               return clientThreadContext->stop();
@@ -136,8 +134,7 @@ struct WSClientServerTestHarness : ServerClientTestHarness {
               clientOutgoingPayload = payload;
               return medici::Expected{};
             },
-            [this](const std::string &reason,
-                   const medici::sockets::IPEndpointConfig &) {
+            [this](const std::string &reason) {
               BOOST_TEST_MESSAGE(
                   std::format("Closing client: reason={}", reason));
               return clientThreadContext->stop();

@@ -58,33 +58,30 @@ struct ServerClientTestHarness {
 
   RunContextTPtr clientThreadContext;
 
-
   medici::sockets::WSEndpointConfig listenEndpoint{"listenHost", "127.0.0.1",
-                                                   12345, "/",false};
+                                                   12345, "/", false};
   std::string endpointType;
 
-  medici::sockets::CloseHandlerT listenCloseHandler =
-      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
-        BOOST_TEST_MESSAGE(
-            std::format(" {} listener close: reason={}", endpointType, reason));
-        return Expected{};
-      };
-  medici::sockets::CloseHandlerT listenDisconnectHandler =
-      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
+  medici::CloseHandlerT listenCloseHandler = [this](const std::string &reason) {
+    BOOST_TEST_MESSAGE(
+        std::format(" {} listener close: reason={}", endpointType, reason));
+    return Expected{};
+  };
+  medici::CloseHandlerT listenDisconnectHandler =
+      [this](const std::string &reason) {
         BOOST_TEST_MESSAGE(std::format(" {} listener disconnected: reason={}",
                                        endpointType, reason));
         return Expected{};
       };
 
-  medici::sockets::CloseHandlerT clientCloseHandler =
-      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
-        BOOST_TEST_MESSAGE(
-            std::format(" {} client close: reason={}", endpointType, reason));
-        return Expected{};
-      };
+  medici::CloseHandlerT clientCloseHandler = [this](const std::string &reason) {
+    BOOST_TEST_MESSAGE(
+        std::format(" {} client close: reason={}", endpointType, reason));
+    return Expected{};
+  };
 
-  medici::sockets::DisconnectedHandlerT clientDisconnectHandler =
-      [this](const std::string &reason, const sockets::IPEndpointConfig &) {
+  medici::DisconnectedHandlerT clientDisconnectHandler =
+      [this](const std::string &reason) {
         BOOST_TEST_MESSAGE(std::format(" {} client disconnected: reason={}",
                                        endpointType, reason));
         return Expected{};

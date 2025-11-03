@@ -109,11 +109,9 @@ public:
     return BaseSocketEndpointT::registerTimer(timer);
   }
 
-  Expected onDisconnected(
-      const std::string &reason,
-      const medici::sockets::IPEndpointConfig &endpointConfig) override {
+  Expected onDisconnected(const std::string &reason) override {
     resetWebsocketState();
-    return BaseSocketEndpointT::onDisconnected(reason, endpointConfig);
+    return BaseSocketEndpointT::onDisconnected(reason);
   }
 
   bool isActive() const override {
@@ -285,7 +283,7 @@ public:
 
   Expected disconnectEndpoint(const std::string &reason) override {
     auto result = BaseSocketEndpointT::closeRemoteConnection();
-    return onDisconnected(reason, this->getConfig());
+    return onDisconnected(reason);
   }
 
   bool supportsDeflatedPayloads() const {
@@ -601,12 +599,10 @@ private:
       Expected handleResult;
       switch (_firstOp) {
       case WSOpCode::ClosedConnection:
-        return onDisconnected("Connection was closed by the remote server",
-                              this->getConfig());
+        return onDisconnected("Connection was closed by the remote server");
       case WSOpCode::Continuation:
         return onDisconnected(
-            "Received continuation on message start ... expected content type",
-            this->getConfig());
+            "Received continuation on message start ... expected content type");
       case WSOpCode::Ping:
         if (auto pingResult = sendFramedPayload(WSOpCode::Pong, messagePayload);
             !pingResult) {
@@ -651,8 +647,7 @@ private:
       }
       default:
         return onDisconnected(
-            "Decoding error ... Received unknown Websocket frame type",
-            this->getConfig());
+            "Decoding error ... Received unknown Websocket frame type");
         break;
       };
 

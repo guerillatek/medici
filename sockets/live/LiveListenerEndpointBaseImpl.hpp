@@ -51,9 +51,7 @@ public:
     if (auto result = closeRemoteConnection(); !result) {
       return result;
     }
-    if (auto result = _eventHandlers.onCloseEndpoint(
-            reason, this->getConnectionManager().getConfig());
-        !result) {
+    if (auto result = _eventHandlers.onCloseEndpoint(reason); !result) {
       return result;
     }
     return this->getConnectionManager().close();
@@ -100,18 +98,15 @@ public:
 
   void resetConnection() { this->getConnectionManager().close(); }
 
-  Expected onDisconnected(
-      const std::string &reason,
-      const medici::sockets::IPEndpointConfig &endpointConfig) override {
+  Expected onDisconnected(const std::string &reason) override {
     resetConnection();
-    return _eventHandlers.onDisconnected(reason, endpointConfig);
+    return _eventHandlers.onDisconnected(reason);
   }
 
   Expected onShutdown() {
     return _eventHandlers.onCloseEndpoint(
         std::format("Shutdown called, closing endpoint name={}",
-                    this->getConnectionManager().getConfig().name()),
-        this->getConfig());
+                    this->getConnectionManager().getConfig().name()));
   }
 
   const medici::ClockNowT &getClock() const override {
