@@ -24,6 +24,13 @@ target_link_libraries(testProducer)
 set_target_properties(testProducer PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY  ${CMAKE_CURRENT_BINARY_DIR}/tests)
 
+add_executable(testDuplex duplexMain.cpp)
+target_include_directories(testDuplex PRIVATE ../../..)
+target_link_libraries(testDuplex)
+set_target_properties(testDuplex PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY  ${CMAKE_CURRENT_BINARY_DIR}/tests)
+
+
 # Channel name validation test
 add_executable(ShmUniqueNametest ShmUniqueNametest.cpp)
 target_include_directories(ShmUniqueNametest PRIVATE ../../..)

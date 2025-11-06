@@ -3,7 +3,6 @@
 #include "medici/event_queue/EventQueue.hpp"
 #include "medici/shm_endpoints/SharedMemPODQueueDefinition.hpp"
 #include "medici/shm_endpoints/SharedMemoryObjectManager.hpp"
-#include "medici/shm_endpoints/shmUtils.hpp"
 
 #include <deque>
 #include <vector>
@@ -17,7 +16,7 @@ namespace medici::shm_endpoints {
 // consumer endpoints can connect to it.
 template <event_queue::EventQueueC EventQueueT, typename HandlerT,
           typename... MessageTypes>
-class ServerShmPODConsumerEndpoint : public ISharedMemEndpointConsumer {
+class ServerShmPODConsumerEndpoint : public ISharedMemEndpointConsumerServer {
 public:
   using QueueDefinition = SharedMemPODQueueDefinition<MessageTypes...>;
   using MessageQueueEntry = typename QueueDefinition::MessageQueueEntry;
@@ -28,7 +27,8 @@ public:
       SharedMemoryObjectManager<SharedMemoryLayout>;
 
   ServerShmPODConsumerEndpoint(const std::string &sharedMemName,
-                               HandlerT &&handler, std::uint32_t producerCount,
+                               const HandlerT &handler,
+                               std::uint32_t producerCount,
                                std::uint32_t producerQueueSize,
                                EventQueueT &eventQueue)
       : _sharedMemoryObjectMgr{sharedMemName,
@@ -39,13 +39,17 @@ public:
                                ShmQueueType::MPSCQueue, producerCount,
                                producerQueueSize},
         _eventQueue{eventQueue}, _sharedMemName{sharedMemName},
-        _handler{std::move(handler)} {};
+        _handler{handler} {};
 
-  const char *getActiveIncomingChannel() const {
+  auto &getIncomingChannel() const  {
     if (!_sharedMemoryObjectMgr) {
-      return 0;
+      throw std::runtime_error("Shared memory not initialized");
     }
-    return _sharedMemoryObjectMgr->getActiveIncomingChannel().name;
+    return _sharedMemoryObjectMgr->getQueueChannel(_activeIncomingChannel);
+  }
+
+  std::uint32_t getIncomingChannelIndex() const override {
+    return _activeIncomingChannel;
   }
 
   ExpectedEventsCount pollAndDispatch() {
@@ -58,10 +62,9 @@ public:
     std::uint32_t dispatchedEvents = 0;
     for (std::uint32_t channelIndex = 0; channelIndex < activeChannels;
          ++channelIndex) {
-
+      _activeIncomingChannel = channelIndex;
       QueueChannelT &channel =
           _sharedMemoryObjectMgr->getQueueChannel(channelIndex);
-
       while (channel.updatesAvailable()) {
         auto result =
             channel.consumeAvailable([this](const MessageQueueEntry &entry) {
@@ -95,6 +98,7 @@ private:
   EventQueueT &_eventQueue;
   std::string _sharedMemName{};
   HandlerT _handler;
+  std::uint32_t _activeIncomingChannel{0};
 };
 
 // This endpoint serves as the producer side of the
@@ -193,6 +197,8 @@ public:
   }
 
   auto &getBackPressureQueue() { return _backPressureQueue; }
+
+  auto &getQueueChannel() const { return _channel; }
 
 private:
   Expected startBackPressureQueue(const auto &message) {

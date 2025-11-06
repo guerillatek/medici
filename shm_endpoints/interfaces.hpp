@@ -13,7 +13,16 @@ private:
   friend class SharedMemEndpointFactory;
 };
 
+class ISharedMemEndpointConsumerServer : public ISharedMemEndpointConsumer {
+public:
+  virtual std::uint32_t getIncomingChannelIndex() const = 0;
+  const char *getIncomingChannelName() const noexcept;
+};
+
 using ISharedMemEndpointConsumerPtr =
     std::shared_ptr<ISharedMemEndpointConsumer>;
+
+using ISharedMemEndpointConsumerServerPtr =
+    std::shared_ptr<ISharedMemEndpointConsumerServer>;
 
 } // namespace medici::shm_endpoints

@@ -34,6 +34,16 @@ struct SharedMemPublishTestHarness {
       std::system(command.c_str());
     }
   }
+
+  void startOutOfProcDuplexClients(int clients) {
+    std::string thisExecutableFolder =
+        std::filesystem::canonical("/proc/self/exe").parent_path().string();
+    for (int i = 0; i < clients; ++i) {
+      std::string command = std::format("{}/testDuplex client{} &",
+                                        thisExecutableFolder, i + 1);
+      std::system(command.c_str());
+    }
+  }
 };
 } // namespace medici::tests
 
@@ -55,6 +65,13 @@ BOOST_AUTO_TEST_CASE(CONSUMER_SERVER_TEST) {
   medici::tests::runServerConsumerFunction(
       numProducers, [this]() { startOutOfProcClientProducers(numProducers); },
       numProducers * 200);
+}
+
+BOOST_AUTO_TEST_CASE(DUPLEX_SERVER_TEST) {
+  const int numClients = 5;
+  // Run in process full duplex server for debugging
+  medici::tests::runFullDuplexServerFunction(
+      numClients, [this]() { startOutOfProcDuplexClients(numClients); });
 }
 
 BOOST_AUTO_TEST_SUITE_END();

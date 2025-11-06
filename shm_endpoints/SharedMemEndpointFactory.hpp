@@ -1,7 +1,7 @@
 #include "medici/event_queue/EventQueue.hpp"
+#include "medici/shm_endpoints/FullDuplexEndpointsImpl.hpp"
 #include "medici/shm_endpoints/SCMPEndpointsImpl.hpp"
 #include "medici/shm_endpoints/SPMCEndpointsImpl.hpp"
-#include "medici/shm_endpoints/shmUtils.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -73,7 +73,7 @@ public:
   // Server Consumer i.e. a market data server receiving subscription requests
   // from shared memory clients
   template <typename... MessageTypes>
-  std::expected<ISharedMemEndpointConsumerPtr, std::string>
+  std::expected<ISharedMemEndpointConsumerServerPtr, std::string>
   createServerConsumerEndpoint(const std::string &queueName,
                                std::uint32_t allowedProducers,
                                std::uint32_t producerQueueSize, auto &&handler
@@ -124,6 +124,70 @@ public:
           queueName.c_str(), ex.what()));
     }
     return {};
+  }
+
+  // Full Duplex Factory Methods
+
+  // Full Duplex Server Endpoint
+  template <typename HandlerT, typename ProducerMessageTypes,
+            typename ConsumerMessageTypes>
+  using DuplexServerEndpointPtr = std::unique_ptr<FullDuplexServerShmEndpoint<
+      EventQueueT, HandlerT, ProducerMessageTypes, ConsumerMessageTypes>>;
+
+  template <typename ProducerMessageTypes, typename ConsumerMessageTypes>
+  auto createFullDuplexServerEndpoint(const std::string &queueName,
+                                      std::uint32_t maxClients,
+                                      size_t consumerQueueSize,
+                                      size_t producerQueueSize,
+                                      auto &&handler) {
+    using HandlerT = std::decay_t<decltype(handler)>;
+    using DuplexServerT =
+        FullDuplexServerShmEndpoint<EventQueueT, HandlerT, ProducerMessageTypes,
+                                    ConsumerMessageTypes>;
+    using DuplexServerEndpointPtr = std::unique_ptr<DuplexServerT>;
+    using ResultT = std::expected<DuplexServerEndpointPtr, std::string>;
+    try {
+      return ResultT{std::make_unique<FullDuplexServerShmEndpoint<
+          EventQueueT, HandlerT, ProducerMessageTypes, ConsumerMessageTypes>>(
+          queueName, maxClients, consumerQueueSize, producerQueueSize,
+          std::forward<decltype(handler)>(handler), *this)};
+    } catch (const std::exception &ex) {
+      return ResultT{std::unexpected(std::format(
+          "Failed to create shared memory full duplex server endpoint  "
+          "queueName = '{}'\n{}",
+          queueName.c_str(), ex.what()))};
+    }
+    return ResultT{};
+  }
+
+  // Full Duplex Client Endpoint
+  template <typename HandlerT, typename ProducerMessageTypes,
+            typename ConsumerMessageTypes>
+  using DuplexClientEndpointPtr = std::unique_ptr<FullDuplexClientShmEndpoint<
+      EventQueueT, HandlerT, ProducerMessageTypes, ConsumerMessageTypes>>;
+
+  template <typename ConsumerMessageTypes, typename ProducerMessageTypes>
+  auto createFullDuplexClientEndpoint(const std::string &queueName,
+                                      const std::string &clientId,
+                                      auto &&handler) {
+    using HandlerT = std::decay_t<decltype(handler)>;
+    using DuplexClientT =
+        FullDuplexClientShmEndpoint<EventQueueT, HandlerT, ConsumerMessageTypes,
+                                    ProducerMessageTypes>;
+    using DuplexClientEndpointPtr = std::unique_ptr<DuplexClientT>;
+    using ResultT = std::expected<DuplexClientEndpointPtr, std::string>;
+    try {
+      return ResultT{std::make_unique<FullDuplexClientShmEndpoint<
+          EventQueueT, HandlerT, ConsumerMessageTypes, ProducerMessageTypes>>(
+          queueName, clientId, std::forward<decltype(handler)>(handler),
+          *this)};
+    } catch (const std::exception &ex) {
+      return ResultT{std::unexpected(std::format(
+          "Failed to create shared memory full duplex client endpoint  "
+          "queueName = '{}'\n{}",
+          queueName.c_str(), ex.what()))};
+    }
+    return ResultT{};
   }
 
   ExpectedEventsCount pollAndDispatchEndpointsEvents() {

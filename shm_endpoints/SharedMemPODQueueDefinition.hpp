@@ -69,10 +69,12 @@ private:
   std::atomic<size_t> _head{0};
   std::atomic<size_t> _tail{0};
   const std::uint32_t _queueSize;
+  const std::uint32_t _channelIndex;
   T _storage[];
 
 public:
-  FixedConstructLenSPSC(std::uint32_t queueSize) : _queueSize(queueSize + 1) {}
+  FixedConstructLenSPSC(std::uint32_t queueSize, std::uint32_t channelIndex)
+      : _queueSize(queueSize + 1), _channelIndex{channelIndex} {}
 
   bool enqueue(const T &value) {
     auto targetTail = (_tail.load(std::memory_order_relaxed) + 1) % _queueSize;
@@ -126,9 +128,16 @@ public:
   static constexpr size_t getQueueSize(std::uint32_t storageEntries) {
     return sizeof(FixedConstructLenSPSC<T>) + sizeof(T) * (storageEntries + 1);
   }
+
+  std::uint32_t getChannelIndex() const noexcept { return _channelIndex; }
 };
 
 enum class ShmQueueType { SPMCQueue, MPSCQueue, FullDuplexQueue };
+
+struct MutexGuard {
+  pthread_mutex_t *mutex;
+  ~MutexGuard() { pthread_mutex_unlock(mutex); }
+};
 
 template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
   static_assert(IsPodTypeGroup<MessageTypes...>(),
@@ -164,18 +173,12 @@ template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
 
   using QueueChannelT = FixedConstructLenSPSC<MessageQueueEntry>;
 
-  struct MutexGuard {
-    pthread_mutex_t *mutex;
-    ~MutexGuard() { pthread_mutex_unlock(mutex); }
-  };
-
   struct SharedMemoryLayout {
     // Metadata stored in shared memory for consumers to discover
     const ShmQueueType _queueType;
     const std::uint32_t _allowedChannels;
     const std::uint32_t _consumerQueueSize;
     const std::uint64_t _messageTypesHash; // Hash of MessageTypes... tuple
-    std::uint32_t _activeIncomingChannel{0};
     std::uint32_t _activeOutgoingChannel{0};
     std::atomic<std::uint32_t> _activeChannels{0};
 
@@ -207,27 +210,27 @@ template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
       // Initialize queue channels
       QueueChannelT *targetChannel = &_queueChannels[0];
       for (std::uint32_t i = 0; i < consumerCount; ++i) {
-        std::construct_at(targetChannel, consumerQueueSize);
+        std::construct_at(targetChannel, consumerQueueSize, i);
         targetChannel = targetChannel->next();
       }
     }
 
     ~SharedMemoryLayout() { pthread_mutex_destroy(&_allocationMutex); }
 
-    auto &getQueueChannel(std::uint32_t consumerIndex) {
-      QueueChannelT *zeroOffset = &_queueChannels[0];
+    QueueChannelT &getQueueChannel(std::uint32_t consumerIndex) {
+      return const_cast<QueueChannelT &>( static_cast<const SharedMemoryLayout*>(this)->getQueueChannel(consumerIndex));
+    }
+
+    const QueueChannelT &getQueueChannel(std::uint32_t consumerIndex) const {
+      const QueueChannelT *zeroOffset = &_queueChannels[0];
       auto consumerQueue =
-          reinterpret_cast<std::byte *>(zeroOffset) +
+          reinterpret_cast<const std::byte *>(zeroOffset) +
           QueueChannelT::getQueueSize(_consumerQueueSize) * (consumerIndex);
-      return *reinterpret_cast<QueueChannelT *>(consumerQueue);
+      return *reinterpret_cast<const QueueChannelT *>(consumerQueue);
     }
 
     auto &getActiveOutgoingChannel() {
       return getQueueChannel(_activeOutgoingChannel);
-    }
-
-    auto &getActiveIncomingChannel() {
-      return getQueueChannel(_activeIncomingChannel);
     }
 
     auto &AllocQueueChannel(const std::string &consumerName) {
@@ -285,23 +288,6 @@ template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
         }
       }
       return {};
-    }
-
-    ExpectedEventsCount consumeMessageFromAllChannels(auto &&handler) {
-      std::uint32_t messagesHandled = 0;
-      for (std::uint32_t i = 0; i < _activeChannels; ++i) {
-        QueueChannelT &channel = getQueueChannel(i);
-        _activeIncomingChannel = i;
-        while (channel.updatesAvailable()) {
-          auto result = channel.consumeAvailable(
-              std::forward<decltype(handler)>(handler));
-          if (!result) {
-            return std::unexpected(result.error());
-          }
-          ++messagesHandled;
-        }
-      }
-      return messagesHandled;
     }
   };
 };

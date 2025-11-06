@@ -1,6 +1,5 @@
 #include "medici/event_queue/EventQueue.hpp"
 #include "medici/shm_endpoints/SharedMemEndpointFactory.hpp"
-#include "medici/shm_endpoints/shmUtils.hpp"
 
 #include <algorithm>
 #include <format>
@@ -69,6 +68,7 @@ struct QuoteSubscription {
 };
 
 struct Trade {
+  Markets market;
   char securityId[64];
   int tradeId;
   int64_t price;
@@ -76,6 +76,7 @@ struct Trade {
 };
 
 struct Quote {
+  Markets market;
   char securityId[64];
   int64_t bidPrice;
   int64_t askPrice;
@@ -98,8 +99,10 @@ struct TestRunContext {
     return sharedMemEndpointFactory.pollAndDispatchEndpointsEvents();
   };
 
+  using SharedMemEndpointFactoryT =
+      shm_endpoints::SharedMemEndpointFactory<EventQueueT>;
   EventQueueT eventQueue;
-  shm_endpoints::SharedMemEndpointFactory<EventQueueT> sharedMemEndpointFactory;
+  SharedMemEndpointFactoryT sharedMemEndpointFactory;
   using ProducerServerEndpointPtr =
       typename shm_endpoints::SharedMemEndpointFactory<
           EventQueueT>::template ProducerServerEndpointPtr<Trade, Quote>;
@@ -282,6 +285,7 @@ void runClientConsumerFunction(const std::string &consumerId) {
                       if constexpr (std::is_same_v<T, Trade>) {
                         ++messagesReceived;
                         std::cout << "Received Trade: "
+                                  << "Venue=" << to_string(msg.market)
                                   << "SecurityId=" << msg.securityId
                                   << ", TradeId=" << msg.tradeId
                                   << ", Price=" << msg.price
@@ -289,6 +293,7 @@ void runClientConsumerFunction(const std::string &consumerId) {
                       } else if constexpr (std::is_same_v<T, Quote>) {
                         ++messagesReceived;
                         std::cout << "Received Quote: "
+                                  << "Venue=" << to_string(msg.market)
                                   << "SecurityId=" << msg.securityId
                                   << ", BidPrice=" << msg.bidPrice
                                   << ", AskPrice=" << msg.askPrice
@@ -349,6 +354,7 @@ void runServerProducerFunction(std::uint32_t numConsumers,
                 std::snprintf(tradeMessage.securityId,
                               sizeof(tradeMessage.securityId), "SEC%03d",
                               i % 10);
+                tradeMessage.market = static_cast<Markets>(i % 10);
                 tradeMessage.tradeId = i;
                 tradeMessage.price = 10000 + i * 10;
                 tradeMessage.quantity = 100 + i;
@@ -370,6 +376,7 @@ void runServerProducerFunction(std::uint32_t numConsumers,
                 std::snprintf(quoteMessage.securityId,
                               sizeof(quoteMessage.securityId), "SEC%03d",
                               i % 10);
+                quoteMessage.market = static_cast<Markets>(i % 10);
                 quoteMessage.bidPrice = 9990 + i * 10;
                 quoteMessage.askPrice = 10010 + i * 10;
                 quoteMessage.bidSize = 500 + i;
@@ -424,6 +431,220 @@ void runServerProducerFunction(std::uint32_t numConsumers,
       });
   auto result = producerRunContext.start(); // Start producer event queue
   queueReady.join();
+}
+
+void runFullDuplexServerFunction(std::uint32_t numClients,
+                                 std::function<void()> queueReadyCallback) {
+  SystemClockNow clock;
+  TestRunContext serverRunContext{"DuplexServerThread", clock};
+  std::uint32_t receivedMessages = 0;
+  std::uint32_t expectedMessages = numClients * 200;
+  std::map<std::string, std::uint32_t> clientMessageCounts;
+  using ConsumerHandlerT =
+      std::function<Expected(const SubscriptionPayload &payload)>;
+  using DuplexPtrT =
+      TestRunContext::SharedMemEndpointFactoryT::DuplexServerEndpointPtr<
+          ConsumerHandlerT, std::tuple<Trade, Quote>,
+          std::tuple<TradeSubscription, QuoteSubscription>>;
+  DuplexPtrT duplexServer;
+  auto result =
+      serverRunContext.sharedMemEndpointFactory.createFullDuplexServerEndpoint<
+          std::tuple<Trade, Quote>,
+          std::tuple<TradeSubscription, QuoteSubscription>>(
+          "FullDuplexTest", numClients, 10, 10,
+          ConsumerHandlerT{[&](const SubscriptionPayload &payload) -> Expected {
+            std::visit(
+                [&](const auto &msg) -> Expected {
+                  using T = std::decay_t<decltype(msg)>;
+                  if constexpr (std::is_same_v<T, TradeSubscription>) {
+                    Trade tradeResponse;
+                    tradeResponse.market = msg.market;
+                    std::strncpy(tradeResponse.securityId, msg.securityId,
+                                 sizeof(tradeResponse.securityId) - 1);
+                    tradeResponse
+                        .securityId[sizeof(tradeResponse.securityId) - 1] =
+                        '\0';
+                    tradeResponse.tradeId = 1;
+                    tradeResponse.price = 10000;
+                    tradeResponse.quantity = 100;
+
+                    duplexServer->pushResponseMessage(tradeResponse);
+                    receivedMessages++;
+                  } else if constexpr (std::is_same_v<T, QuoteSubscription>) {
+                    Quote quoteResponse;
+                    quoteResponse.market = msg.market;
+                    std::strncpy(quoteResponse.securityId, msg.securityId,
+                                 sizeof(quoteResponse.securityId) - 1);
+                    quoteResponse
+                        .securityId[sizeof(quoteResponse.securityId) - 1] =
+                        '\0';
+                    quoteResponse.bidPrice = 9990;
+                    quoteResponse.askPrice = 10010;
+                    quoteResponse.bidSize = 500;
+                    quoteResponse.askSize = 600;
+                    duplexServer->pushResponseMessage(quoteResponse);
+                    receivedMessages++;
+                  }
+                  if (receivedMessages >= expectedMessages) {
+                    serverRunContext.stop();
+                    std::cout << "Server stopped after receiving "
+                              << receivedMessages << " messages" << std::endl;
+                  }
+
+                  return {};
+                },
+                payload);
+            return {};
+          }});
+  if (!result) {
+    std::cerr << "Failed to create FullDuplex server endpoint: "
+              << result.error() << std::endl;
+    return;
+  }
+  duplexServer = std::move(result.value());
+
+  std::cout << "FullDuplex server endpoint created, starting event queue."
+            << std::endl;
+  std::jthread qrc{queueReadyCallback};
+
+  auto startResult = serverRunContext.start();
+  if (!startResult) {
+    std::cerr << "FullDuplex server event queue terminated with failure: "
+              << startResult.error() << std::endl;
+  }
+}
+
+void runFullDuplexClientFunction(const std::string &clientId) {
+  SystemClockNow clock;
+  TestRunContext clientRunContext{"DuplexClientThread", clock};
+  std::uint32_t messagesReceived = 0;
+  std::uint32_t messagesSent = 0;
+  using ConsumerHandlerT =
+      std::function<Expected(const MarketDataPayload &payload)>;
+  using DuplexClientPtrT =
+      TestRunContext::SharedMemEndpointFactoryT::DuplexClientEndpointPtr<
+          ConsumerHandlerT, std::tuple<Trade, Quote>,
+          std::tuple<TradeSubscription, QuoteSubscription>>;
+
+  DuplexClientPtrT duplexClient;
+
+  auto result =
+      clientRunContext.sharedMemEndpointFactory.createFullDuplexClientEndpoint<
+          std::tuple<Trade, Quote>,
+          std::tuple<TradeSubscription, QuoteSubscription>>(
+          "FullDuplexTest", clientId,
+          ConsumerHandlerT{[&](const MarketDataPayload &payload) -> Expected {
+            std::visit(
+                [&](const auto &msg) {
+                  using T = std::decay_t<decltype(msg)>;
+                  if constexpr (std::is_same_v<T, Trade>) {
+                    std::cout << "Client " << clientId << " received Trade: "
+                              << "SecurityId=" << msg.securityId
+                              << ", Market=" << to_string(msg.market)
+                              << ", TradeId=" << msg.tradeId
+                              << ", Price=" << msg.price
+                              << ", Quantity=" << msg.quantity << std::endl;
+                    messagesReceived++;
+                  } else if constexpr (std::is_same_v<T, Quote>) {
+                    std::cout << "Client " << clientId << " received Quote: "
+                              << "SecurityId=" << msg.securityId
+                              << ", Market=" << to_string(msg.market)
+                              << ", BidPrice=" << msg.bidPrice
+                              << ", AskPrice=" << msg.askPrice
+                              << ", BidSize=" << msg.bidSize
+                              << ", AskSize=" << msg.askSize << std::endl;
+                    messagesReceived++;
+                  }
+
+                  // Stop when we've received all expected responses
+                  if (messagesReceived >= 200) {
+                    clientRunContext.stop();
+                  }
+                },
+                payload);
+            return {};
+          }});
+  if (!result) {
+    std::cerr << "Failed to create FullDuplex client endpoint: "
+              << result.error() << std::endl;
+    return;
+  }
+
+  duplexClient = std::move(result.value());
+
+  // Send subscription messages
+  std::vector<std::string> securities = {"BTC",  "ETH",  "SOL",  "XPR",
+                                         "OPEN", "USDC", "USDT", "DOGE",
+                                         "ADA",  "MATIC"};
+  std::vector<Markets> markets = {
+      Markets::BINANCE,  Markets::COINBASE, Markets::KRAKEN, Markets::BYBIT,
+      Markets::MEXC,     Markets::OKX,      Markets::HUOBI,  Markets::GATEIO,
+      Markets::BITFINEX, Markets::BITSTAMP};
+
+  clientRunContext.eventQueue.postAction([&]() -> medici::Expected {
+    // Send trade subscriptions
+    for (const auto &security : securities) {
+      for (const auto &market : markets) {
+        TradeSubscription tradeSubscription;
+        std::strncpy(tradeSubscription.securityId, security.c_str(),
+                     sizeof(tradeSubscription.securityId) - 1);
+        tradeSubscription.securityId[sizeof(tradeSubscription.securityId) - 1] =
+            '\0';
+        tradeSubscription.market = market;
+
+        auto pushResult = duplexClient->pushMessage(tradeSubscription);
+        if (!pushResult) {
+          std::cerr << "Failed to push trade subscription for " << security
+                    << ": " << pushResult.error() << std::endl;
+          return std::unexpected(pushResult.error());
+        }
+        ++messagesSent;
+
+        QuoteSubscription quoteSubscription;
+        std::strncpy(quoteSubscription.securityId, security.c_str(),
+                     sizeof(quoteSubscription.securityId) - 1);
+        quoteSubscription.securityId[sizeof(quoteSubscription.securityId) - 1] =
+            '\0';
+        quoteSubscription.market = market;
+
+        auto quotePushResult = duplexClient->pushMessage(quoteSubscription);
+        if (!quotePushResult) {
+          std::cerr << "Failed to push quote subscription for " << security
+                    << ": " << quotePushResult.error() << std::endl;
+          return std::unexpected(quotePushResult.error());
+        }
+        ++messagesSent;
+      }
+    }
+
+    std::cout << "Full Duplex " << clientId
+              << " finished sending subscription messages." << std::endl;
+    return {};
+  });
+
+  // shutdown When all messages sent and no backpressure
+  clientRunContext.eventQueue.postPrecisionTimedAction(
+      clock() + std::chrono::seconds{5}, [&]() -> medici::Expected {
+        if ((messagesSent >= 200) &&
+            (duplexClient->getBackPressureQueue().empty())) {
+          if (messagesReceived < 200) {
+            return std::unexpected{
+                std::format("Timeout for all waiting for {} messages. ",
+                            200 - messagesReceived)};
+          }
+          clientRunContext.stop();
+        }
+        return medici::Expected{};
+      });
+
+  // Start the client event queue
+  std::cout << "Client " << clientId << " starting event queue." << std::endl;
+  auto startResult = clientRunContext.start();
+  if (!startResult) {
+    std::cerr << clientId
+              << " event queue terminated with failure: " << startResult.error()
+              << std::endl;
+  }
 }
 
 } // namespace medici::tests
