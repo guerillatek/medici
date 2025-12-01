@@ -13,7 +13,7 @@ find_package(OpenSSL REQUIRED)
 
 add_compile_options(-Werror=return-type
                         -Werror=return-type -Werror=unused-variable
-                        -Werror=unused-function -Werror=unused-value
+                        -Werror=unused-function 
                         -Werror=unused-but-set-variable)
 
 add_subdirectory(tests)

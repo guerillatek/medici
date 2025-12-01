@@ -3,6 +3,8 @@
 #include "medici/time.hpp"
 
 #include <chrono>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 

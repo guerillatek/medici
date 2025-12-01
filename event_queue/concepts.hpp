@@ -24,7 +24,11 @@ public:
   virtual Expected postPrecisionTimedAction(TimePoint timePoint,
                                             const CallableT &action) = 0;
   virtual Expected postIdleTimedAction(TimePoint timePoint,
-                                       CallableT &action) = 0;
+                                       const CallableT &action) = 0;
+  virtual Expected start() = 0;
+  virtual Expected stop() = 0;
+  virtual Expected pumpEvents() = 0;
+  virtual bool isActive() const = 0;
 };
 
 template <typename T>

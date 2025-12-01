@@ -418,7 +418,7 @@ private:
   }
 
   Expected postIdleTimedAction(TimePoint timePoint,
-                               CallableT &action) override {
+                               const CallableT &action) override {
     return postIdleTimedAction<CallableT>(timePoint, CallableT{action});
   }
 

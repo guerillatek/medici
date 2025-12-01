@@ -1,3 +1,5 @@
+#pragma once
+
 #include <concepts>
 #include <expected>
 #include <iostream>
@@ -34,14 +36,14 @@ public:
                         std::optional<std::uint32_t> schedPolicy = {},
                         std::optional<std::uint32_t> schedPriority = {})
 
-      : ContextThreadConfig{},
-        _producers{producers}, _inactivityMicros{inactivityMicros},
-        _certFile{certFile}, _keyFile{keyFile}, _keyPassword{keyPassword} {
-    _runContextType = "IPAppRunContext";
+      : ContextThreadConfig{}, _producers{producers},
+        _inactivityMicros{inactivityMicros}, _certFile{certFile},
+        _keyFile{keyFile}, _keyPassword{keyPassword} {
+    _runContextType = "LiveIPEndpointContext";
     _name = name;
     _cpu = cpu;
     _schedPolicy = schedPolicy;
-    _schedPriority = schedPriority; 
+    _schedPriority = schedPriority;
   }
 
   std::uint32_t _producers{1};
@@ -83,6 +85,20 @@ public:
   auto &getTimerFactory() { return _timerFactory; }
 
   auto &getEndpointPollManager() { return _endpointPollManager; }
+
+  auto &getShmEndpointFactory() {
+    if constexpr (requires {
+                    _endpointPollManager.getSharedMemEndpointFactory();
+                  }) {
+      // Endpoint poll manager supports shared memory endpoint factory
+      return _endpointPollManager.getSharedMemEndpointFactory();
+    } else {
+      static_assert(
+          false,
+          "Endpoint poll manager does not support shared memory endpoint "
+          "factory");
+    }
+  }
 
   Expected start() override {
     if (auto result = _endpointPollManager.initialize(); !result) {

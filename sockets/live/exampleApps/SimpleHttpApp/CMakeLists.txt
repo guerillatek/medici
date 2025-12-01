@@ -9,13 +9,13 @@ set_target_properties(simpleHttpApp PROPERTIES
 
 
 target_link_libraries(simpleHttpApp PRIVATE
-OpenSSL::SSL OpenSSL::Crypto 
-ZLIB::ZLIB
 liveMediciSockets 
 cryptpoUtils
 httpUtils
 brotlienc 
 brotlidec
+OpenSSL::SSL OpenSSL::Crypto 
+ZLIB::ZLIB
 )
 
 

@@ -19,6 +19,7 @@ concept IPEndpointConfigC = requires(T t) {
   { t.host() } -> std::convertible_to<std::string>;
   { t.port() } -> std::convertible_to<std::uint16_t>;
   { t.interface() } -> std::convertible_to<std::string>;
+  { t.recvBufferKB() } -> std::convertible_to<std::uint32_t>;
   { t.ioLogging() } -> std::convertible_to<IOloggingConfig>;
 };
 

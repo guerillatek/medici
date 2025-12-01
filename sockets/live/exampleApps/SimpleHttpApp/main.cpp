@@ -2,8 +2,7 @@
 #include "medici/cryptoUtils/OpenSSLUtils.hpp"
 #include "medici/http/writeBufferToTempFile.hpp"
 #include "medici/sockets/live/HttpServerHandler.hpp"
-#include "medici/sockets/live/IPEndpointPollManager.hpp"
-#include "medici/sockets/live/LiveSocketFactory.hpp"
+
 #include "medici/sockets/live/testCredentials/sslTestCerts.hpp"
 #include "medici/time.hpp"
 
@@ -34,9 +33,7 @@ int main() {
   std::string serverKeyFilePath = http::writeBufferToTempFile(
       std::string_view{serverKey}, "serverKey", ".key");
 
-  using AppRunContextManagerT = medici::application::AppRunContextManager<
-      medici::sockets::live::LiveSocketFactory, medici::SystemClockNow,
-      medici::sockets::live::IPEndpointPollManager>;
+  using AppRunContextManagerT = medici::application::AppRunContextManager<>;
   AppRunContextManagerT runContextManager;
   medici::application::ContextThreadConfigList configs;
   // Populate configs as needed
@@ -50,7 +47,7 @@ int main() {
     return 1;
   }
 
-  using IPAppRunContextT = AppRunContextManagerT::IPAppRunContextT;
+  using IPAppRunContextT = AppRunContextManagerT::LiveIPEndpointContextT;
 
   auto &runContext =
       runContextManager.getAppRunContext<IPAppRunContextT>("SimpleHttpApp");

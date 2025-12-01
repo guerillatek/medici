@@ -3,6 +3,10 @@
 #include "medici/application/ContextThreadConfig.hpp"
 #include "medici/application/IAppContext.hpp"
 #include "medici/application/IPAppRunContext.hpp"
+#include "medici/event_queue/concepts.hpp"
+#include "medici/shm_endpoints/SharedMemEndpointFactory.hpp"
+#include "medici/sockets/live/IPEndpointPollManager.hpp"
+#include "medici/sockets/live/LiveSocketFactory.hpp"
 
 #include <Aeron.h>
 #include <format>
@@ -10,13 +14,49 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
 namespace medici::application {
+
+class IPEndpointPollManagerWithShmSupport
+    : public medici::sockets::live::IPEndpointPollManager {
+public:
+  using SharedMemEndpointFactoryT =
+      shm_endpoints::SharedMemEndpointFactory<event_queue::IEventQueue>;
+
+  SharedMemEndpointFactoryT _shmEndpointFactory;
+
+  IPEndpointPollManagerWithShmSupport(const std::string &name,
+                                      const ClockNowT &clock,
+                                      event_queue::IEventQueue &eventQueue,
+                                      const std::string &certFile = "",
+                                      const std::string &keyFile = "")
+      : medici::sockets::live::IPEndpointPollManager(name, clock, eventQueue,
+                                                     certFile, keyFile),
+        _shmEndpointFactory{eventQueue} {}
+
+  SharedMemEndpointFactoryT &getSharedMemEndpointFactory() {
+    return _shmEndpointFactory;
+  }
+
+  ExpectedEventsCount pollAndDispatchEndpointsEvents() {
+    auto result = medici::sockets::live::IPEndpointPollManager::
+        pollAndDispatchEndpointsEvents();
+    if (!result) {
+      return result;
+    }
+
+    auto shmResult = _shmEndpointFactory.pollAndDispatchEndpointsEvents();
+    if (!shmResult) {
+      return shmResult;
+    }
+
+    return *result + *shmResult;
+  }
+};
 
 using ContextThreadConfigList = std::vector<ContextThreadConfigPtr>;
 
-template <sockets::SocketFactoryC SocketFactoryT, ClockNowC ClockNowT,
-          EndpointEventPollMgrC IPEndpointEventPollMgrT,
-          std::uint32_t ServiceRequestQueueSize = 256,
+template <std::uint32_t ServiceRequestQueueSize = 256,
           std::uint32_t PublisherQueueSize = 1024>
 class AppRunContextManager {
 
@@ -38,19 +78,34 @@ class AppRunContextManager {
   };
 
 public:
-  using IPAppRunContextT =
-      IPAppRunContext<SocketFactoryT, ClockNowT, IPEndpointEventPollMgrT,
-                      ServiceRequestQueueSize>;
+  using LiveIPEndpointContextT = IPAppRunContext<
+      medici::sockets::live::LiveSocketFactory, medici::SystemClockNow,
+      medici::sockets::live::IPEndpointPollManager, ServiceRequestQueueSize>;
+
+  using LiveIPShmEndpointContextT = IPAppRunContext<
+      medici::sockets::live::LiveSocketFactory, medici::SystemClockNow,
+      IPEndpointPollManagerWithShmSupport, ServiceRequestQueueSize>;
 
   AppRunContextManager() {
-    _contextFactoryRegistry["IPAppRunContext"] =
+    _contextFactoryRegistry["LiveIPEndpointContext"] =
         [this](const ContextThreadConfig &config) -> ExpectedContextPtr {
       auto ipConfig = dynamic_cast<const IPContextThreadConfig *>(&config);
       if (ipConfig == nullptr) {
         return std::unexpected{
             "AppRunContextManager: Invalid config type for IP context"};
       }
-      return std::make_shared<IPAppRunContextT>(*ipConfig, _clock);
+      return std::make_shared<LiveIPEndpointContextT>(*ipConfig, _clock);
+    };
+
+    _contextFactoryRegistry["LiveIPShmEndpointContext"] =
+        [this](const ContextThreadConfig &config) -> ExpectedContextPtr {
+      auto ipConfig = dynamic_cast<const IPContextThreadConfig *>(&config);
+      if (ipConfig == nullptr) {
+        return std::unexpected{
+            "AppRunContextManager: Invalid config type for IP context"};
+      }
+      return std::make_shared<LiveIPShmEndpointContextT>(*ipConfig,
+                                                                    _clock);
     };
   }
 
@@ -173,7 +228,7 @@ private:
 
   std::map<std::string, ContextWithRunParams> _contextLookup;
   std::map<std::string, std::jthread> _threadsByName;
-  ClockNowT _clock{};
+  medici::SystemClockNow _clock{};
   ContextFactoryFunctionRegistry _contextFactoryRegistry;
 };
 
