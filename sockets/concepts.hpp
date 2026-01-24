@@ -21,13 +21,13 @@ using SocketPayloadHandlerT =
     std::function<sockets::Expected((std::string_view, TimePoint))>;
 
 using HttpPayloadHandlerT = std::function<sockets::Expected(
-    (const http::HttpFields &, std::string_view, TimePoint))>;
+    (const http::HeaderFields &, std::string_view, TimePoint))>;
 
 using HttpClientPayloadHandlerT = std::function<sockets::Expected(
-    (const http::HttpFields &, std::string_view, int, TimePoint))>;
+    (const http::HeaderFields &, std::string_view, int, TimePoint))>;
 
 using HttpServerPayloadHandlerT = std::function<sockets::Expected(
-    (http::HTTPAction, const std::string &, const http::HttpFields &,
+    (http::HTTPAction, const std::string &, const http::HeaderFields &,
      const HttpServerPayloadT &, TimePoint))>;
 
 using WebSocketPayloadHandlerT =
@@ -129,21 +129,21 @@ concept SocketPayloadHandlerC = requires(T t) {
 template <typename T>
 concept HttpPayloadHandlerC = requires(T t) {
   {
-    t(http::HttpFields{}, std::string_view{}, TimePoint{})
+    t(http::HeaderFields{}, std::string_view{}, TimePoint{})
   } -> std::same_as<Expected>;
 };
 
 template <typename T>
 concept HttpClientPayloadHandlerC = requires(T t) {
   {
-    t(http::HttpFields{}, std::string_view{}, int{}, TimePoint{})
+    t(http::HeaderFields{}, std::string_view{}, int{}, TimePoint{})
   } -> std::same_as<Expected>;
 };
 
 template <typename T>
 concept HttpServerPayloadHandlerC = requires(T t) {
   {
-    t(http::HTTPAction{}, std::string{}, http::HttpFields{},
+    t(http::HTTPAction{}, std::string{}, http::HeaderFields{},
       HttpServerPayloadT{}, TimePoint{})
   } -> std::same_as<Expected>;
 };

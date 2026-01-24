@@ -6,7 +6,7 @@ find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 
-add_library(liveMediciSockets SHARED 
+add_library(liveMediciSockets STATIC 
     IPEndpointConnectionManager.cpp IPEndpointConnectionManager.hpp
     IPEndpointPollManager.cpp IPEndpointPollManager.hpp
 )

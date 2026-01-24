@@ -33,7 +33,7 @@ concept WSEndpointConfigC = HTTPEndpointConfigC<T> && requires(T t) {
   { t.perMessageDeflate() } -> std::convertible_to<bool>;
 };
 
-class IPEndpointConfig {
+struct IPEndpointConfig {
   std::string _name{};
   std::string _host{};
   std::uint16_t _port{0};
@@ -68,7 +68,7 @@ public:
   auto &ioLogging() const { return _ioLogging; }
 };
 
-class HttpEndpointConfig : public IPEndpointConfig {
+struct HttpEndpointConfig : public IPEndpointConfig {
   std::string _uriPath{};
 
 public:

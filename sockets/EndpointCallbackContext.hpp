@@ -94,7 +94,7 @@ public:
             std::forward<ArgsT>(args)...,
             config,
             endpointPollManager,
-            [this, &incomingPayloadHandler](const http::HttpFields &httpFields,
+            [this, &incomingPayloadHandler](const http::HeaderFields &httpFields,
                                             auto payload, int ec, auto tp) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
@@ -150,7 +150,7 @@ public:
             endpointPollManager,
             [this, &incomingPayloadHandler](
                 http::HTTPAction action, const std::string &requestURI,
-                const http::HttpFields &httpFields,
+                const http::HeaderFields &httpFields,
                 const HttpServerPayloadT &payload, TimePoint tp) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());

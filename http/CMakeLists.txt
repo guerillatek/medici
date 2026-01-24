@@ -1,4 +1,4 @@
-add_library(httpUtils SHARED 
+add_library(httpUtils STATIC 
     FieldContentUtils.cpp FieldContentUtils.hpp
     HttpFields.cpp HttpFields.hpp
     ContentType.cpp ContentType.hpp

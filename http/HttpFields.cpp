@@ -12,10 +12,13 @@ HttpFields::HttpFields(const MultipartPayload &multipartPayload) {
                            FieldValueEntry{mapEntry.second.string(), true});
   }
   updateFieldCountAndArrayFlags();
+  _caseTransform = [](const unsigned char c) { return c; };
 }
 
-HttpFields::HttpFields(const FieldValueMap &fieldValueMap)
-    : _fieldValueMap{fieldValueMap} {
+
+HttpFields::HttpFields(const FieldValueMap &fieldValueMap,
+                       CaseTransformFunc caseTransform)
+    : _fieldValueMap{fieldValueMap}, _caseTransform{std::move(caseTransform)} {
   std::string lastFieldName;
   updateFieldCountAndArrayFlags();
 }
@@ -48,7 +51,7 @@ void HttpFields::updateFieldCountAndArrayFlags() {
 std::expected<std::string, std::string>
 HttpFields::getField(std::string fieldName) const {
   std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
-                 [](unsigned char c) { return std::toupper(c); });
+                 _caseTransform);
   auto entryResult = getFieldEntry(fieldName);
   if (!entryResult) {
     return std::unexpected(entryResult.error());
@@ -59,7 +62,7 @@ HttpFields::getField(std::string fieldName) const {
 std::expected<std::vector<std::string>, std::string>
 HttpFields::getArrayFieldValues(std::string fieldName) const {
   std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
-                 [](unsigned char c) { return std::toupper(c); });
+                 _caseTransform);
   std::vector<std::string> values;
   auto result = getFieldEntry(fieldName);
   if (!result) {

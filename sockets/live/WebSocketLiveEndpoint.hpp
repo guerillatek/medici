@@ -46,7 +46,7 @@ public:
                         OnActiveHandlerT onActiveHandler)
       : BaseSocketEndpointT{config,
                             endpointPollManager,
-                            [this](const http::HttpFields &headers,
+                            [this](const http::HeaderFields &headers,
                                    std::string_view payload, int rc,
                                    TimePoint tp) {
                               return handleBaseSocketInboundPayload(
@@ -74,7 +74,7 @@ public:
             config,
             endpointPollManager,
             [this](http::HTTPAction action, const std::string &uri,
-                   const http::HttpFields &headers,
+                   const http::HeaderFields &headers,
                    const HttpServerPayloadT &payload, TimePoint tp) {
               return handleBaseSocketInboundPayload(
                   headers, std::get<std::string_view>(payload), tp);
@@ -302,7 +302,7 @@ private:
 
     if constexpr (std::is_same_v<ClientSideEndpointT, BaseSocketEndpointT>) {
       // On the client side we use this dispatch to so send the upgrade request
-      http::HttpFields upgradeHeaders;
+      http::HeaderFields upgradeHeaders;
       const auto key = crypto_utils::generateKey();
       upgradeHeaders.addFieldValue("Upgrade", "websocket");
       upgradeHeaders.addFieldValue("Connection", "Upgrade");
@@ -334,7 +334,7 @@ private:
     return BaseSocketEndpointT::onPayloadReady(readTime);
   }
 
-  Expected handleBaseSocketInboundPayload(const http::HttpFields &headers,
+  Expected handleBaseSocketInboundPayload(const http::HeaderFields &headers,
                                           std::string_view payload,
                                           TimePoint tp) {
     if (_upgraded) [[likely]] {
@@ -357,7 +357,7 @@ private:
                         config.name(), config.host(), config.port(),
                         this->_uriPath, payload);
         return BaseSocketEndpointT::sendHttpResponse(
-            http::HttpFields{}, 400, response, "",
+            http::HeaderFields{}, 400, response, "",
             http::ContentType::TextPlain);
       }
 
@@ -365,7 +365,7 @@ private:
       if (auto secKey = headers.getField("Sec-WebSocket-Key"); secKey) {
         std::string acceptKey =
             crypto_utils::generateWebSocketAcceptKey(secKey.value());
-        http::HttpFields responseHeaders;
+        http::HeaderFields responseHeaders;
         responseHeaders.addFieldValue("Upgrade", "websocket");
         responseHeaders.addFieldValue("Connection", "Upgrade");
         responseHeaders.addFieldValue("Sec-WebSocket-Accept", acceptKey);

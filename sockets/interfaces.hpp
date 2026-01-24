@@ -57,7 +57,8 @@ public:
 
 using ITcpIpEndpointPtr = std::unique_ptr<ITcpIpEndpoint>;
 
-using HttpServerPayloadT = std::variant<http::HttpFields, std::string_view>;
+using HttpServerPayloadT =
+    std::variant<http::QueryFormFields, std::string_view>;
 
 struct HttpResponsePayloadOptions {
   static constexpr uint8_t AllCompressionEncodings =
@@ -75,15 +76,15 @@ public:
   virtual void setURIPath(const std::string &) = 0;
   // Client side sendHttp
   virtual Expected sendHttpRequest(
-      http::HTTPAction action, http::HttpFields &&headersValues,
+      http::HTTPAction action, http::HeaderFields &&headersValues,
       std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compressed = http::SupportedCompression::None,
       HttpResponsePayloadOptions responsePayloadOptions = {}) = 0;
 
   virtual Expected sendFormRequest(
-      http::HTTPAction action, http::HttpFields &&headersValues,
-      const http::HttpFields &formContent,
+      http::HTTPAction action, http::HeaderFields &&headersValues,
+      const http::QueryFormFields &formContent,
       http::SupportedCompression compressed = http::SupportedCompression::None,
       HttpResponsePayloadOptions responsePayloadOptions = {}) = 0;
 };
@@ -94,14 +95,14 @@ class IHttpServerEndpoint : public IIPEndpoint {
 public:
   // Server side sendHttp
   virtual Expected sendHttpResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compressed =
           http::SupportedCompression::None) = 0;
 
   virtual Expected sendFileResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string filePath = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compressed =

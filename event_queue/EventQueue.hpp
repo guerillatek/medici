@@ -117,11 +117,11 @@ class EventQueue : public IEventQueue {
                           std::greater<PrioritizedCallable>>;
 
 public:
-  EventQueue(const std::string &sessionName,
+  EventQueue(const std::string &queueName,
              EndpointEventPollMgrT &endpointEventPollMgr, const ClockT &clock,
              std::uint32_t maxProducerThreads,
              std::chrono::microseconds inActivitySleepDuration)
-      : _externalProducerQueue{maxProducerThreads},
+      : _queueName{queueName}, _externalProducerQueue{maxProducerThreads},
         _endpointEventPollMgr{endpointEventPollMgr}, _clock{clock},
         _maxProducerThreads{maxProducerThreads},
         _inActivitySleepDuration{inActivitySleepDuration} {}
@@ -265,8 +265,8 @@ public:
     while (_activeThreadId && result) {
       result = runEventCycle();
       if (!result) {
-        std::cerr << "Event queue encountered error: "
-                  << result.error() << std::endl;
+        std::cerr << "Event queue encountered error: " << result.error()
+                  << std::endl;
         return result;
       }
     }
@@ -376,7 +376,7 @@ private:
     }
     return {};
   }
-
+  std::string _queueName{};
   ExternalThreadProducerQueue _externalProducerQueue{};
   using ProducerQueueEntry = typename ExternalThreadProducerQueue::iterator;
 
@@ -424,6 +424,7 @@ private:
 
   // TODO: Put members in order of use in poll cycle to have better
   // cache locality
+
   TimedEventQueue _precisionTimedEvents{};
   TimedEventQueue _idleTimedEvents{};
   LocalAsyncQueue _localEventQueue{};

@@ -6,13 +6,13 @@
 namespace medici::sockets {
 
 // https://en.wikipedia.org/wiki/WebSocket#cite_note-41
-constexpr static char WS_FIN = 0b1000'0000;
-[[maybe_unused]] constexpr static char WS_RSV1 = 0b0100'0000;
-[[maybe_unused]] constexpr static char WS_RSV2 = 0b0010'0000;
-[[maybe_unused]] constexpr static char WS_RSV3 = 0b0001'0000;
-constexpr static char WS_OPCODE = 0b0000'1111;
-constexpr static char WS_MASK = 0b1000'0000;
-constexpr static char WS_LENGTH = 0b0111'1111;
+constexpr static unsigned char WS_FIN = 0b1000'0000;
+[[maybe_unused]] constexpr static unsigned char WS_RSV1 = 0b0100'0000;
+[[maybe_unused]] constexpr static unsigned char WS_RSV2 = 0b0010'0000;
+[[maybe_unused]] constexpr static unsigned char WS_RSV3 = 0b0001'0000;
+constexpr static unsigned char WS_OPCODE = 0b0000'1111;
+constexpr static unsigned char WS_MASK = 0b1000'0000;
+constexpr static unsigned char WS_LENGTH = 0b0111'1111;
 
 enum class WSOpCode : std::uint8_t {
   Continuation = 0x0,

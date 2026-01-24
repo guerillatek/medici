@@ -25,7 +25,7 @@ public:
       : BaseSocketEndpointT{fd,
                             config,
                             endpointPollManager,
-                            [this](const http::HttpFields &requestHeaders,
+                            [this](const http::HeaderFields &requestHeaders,
                                    std::string_view payload, TimePoint tp) {
                               return demuxPayloadToVariantTypes(requestHeaders,
                                                                 payload, tp);
@@ -38,7 +38,7 @@ public:
         _serverPayloadHandler{std::move(serverPayloadHandler)} {}
 
   Expected sendHttpResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compression =
@@ -56,7 +56,7 @@ public:
   }
 
   Expected sendFileResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string filePath = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compressed =
@@ -79,7 +79,7 @@ public:
   }
 
 private:
-  Expected demuxPayloadToVariantTypes(const http::HttpFields &requestHeaders,
+  Expected demuxPayloadToVariantTypes(const http::HeaderFields &requestHeaders,
                                       std::string_view payload, TimePoint tp) {
     if (requestHeaders.HasField("Content-Type")) {
       if (requestHeaders.getField("Content-Type")
@@ -98,7 +98,7 @@ private:
             !result) {
           return result;
         }
-        http::HttpFields formFields{multiPartPayload};
+        http::QueryFormFields formFields{multiPartPayload};
         return _serverPayloadHandler(BaseSocketEndpointT::getIncomingAction(),
                                      BaseSocketEndpointT::getRequestURIPath(),
                                      requestHeaders, formFields, tp);
@@ -107,7 +107,7 @@ private:
                      .find("application/x-www-form-urlencoded") !=
                  std::string::npos) {
         // URL Encoded form data
-        http::HttpFields formFields;
+        http::QueryFormFields formFields;
         auto loadResult = formFields.loadFromURLString(std::string{payload});
         if (!loadResult) {
           return std::unexpected(
@@ -121,7 +121,7 @@ private:
     } else if ((this->getIncomingAction() == http::HTTPAction::GET) &&
                (this->getRequestURIPath().find('?') != std::string::npos)) {
       // URL Encoded form data in GET request
-      http::HttpFields formFields;
+      http::QueryFormFields formFields;
       auto queryString = this->getRequestURIPath().substr(
           this->getRequestURIPath().find('?') + 1);
       auto loadResult = formFields.loadFromURLString(std::string{queryString});

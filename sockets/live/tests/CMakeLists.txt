@@ -22,11 +22,14 @@ boost_container
 boost_unit_test_framework 
 OpenSSL::SSL OpenSSL::Crypto 
 ZLIB::ZLIB
-liveMediciSockets 
 cryptpoUtils
 httpUtils
-brotlienc 
+ssl
+crypto
+z
+brotlienc
 brotlidec
+liveMediciSockets
 )
 
 

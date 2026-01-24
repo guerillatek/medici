@@ -1,5 +1,4 @@
 #define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
 
@@ -63,10 +62,10 @@ BOOST_AUTO_TEST_CASE(TCP_LIVE_ENDPOINT_TEST) {
 
   auto payloadHandler2 = [](std::string_view, TimePoint) { return Expected{}; };
 
-  auto payloadHandler3 = [](const http::HttpFields &, std::string_view, int,
+  auto payloadHandler3 = [](const http::HeaderFields &, std::string_view, int,
                             TimePoint) { return Expected{}; };
 
-  auto payloadHandler4 = [](const http::HttpFields &, std::string_view, int,
+  auto payloadHandler4 = [](const http::HeaderFields &, std::string_view, int,
                             TimePoint) { return Expected{}; };
 
   auto payloadHandler5 = [](std::string_view, WSOpCode, TimePoint) {

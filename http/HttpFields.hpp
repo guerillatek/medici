@@ -3,11 +3,13 @@
 #include "medici/http/FieldContentUtils.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <exception>
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
@@ -15,8 +17,11 @@ namespace medici::http {
 class MultipartPayload;
 class HttpFields {
 public:
+  using CaseTransformFunc = std::function<unsigned char(const unsigned char)>;
+
   explicit HttpFields(const MultipartPayload &multipartPayload);
-  explicit HttpFields(const FieldValueMap &multipartPayload);
+  HttpFields(const FieldValueMap &multipartPayload,
+             CaseTransformFunc caseTransform = ::toupper);
   HttpFields() = default;
   ~HttpFields() = default;
   HttpFields(const HttpFields &other) = default;
@@ -30,7 +35,7 @@ public:
 
   auto HasField(std::string fieldName) const {
     std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   _caseTransform);
     auto fieldEntry = _fieldValueMap.find(fieldName);
     return fieldEntry != _fieldValueMap.end();
   }
@@ -38,7 +43,7 @@ public:
   void addFieldValue(std::string fieldName, const std::string &value,
                      bool isFilePath = false) {
     std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   _caseTransform);
     if (_fieldValueMap.contains(fieldName)) {
       _hasArrayFields = true;
     } else {
@@ -47,7 +52,7 @@ public:
     _fieldValueMap.emplace(fieldName, FieldValueEntry{value, isFilePath});
     if (isFilePath) {
       _hasFilePathFields = true;
-    } 
+    }
   }
 
   auto encodeAsQueryString() const {
@@ -91,12 +96,18 @@ public:
     return _fieldValueMap == other._fieldValueMap;
   }
 
+  void amend(const HttpFields &other) {
+    for (const auto &[name, entry] : other._fieldValueMap) {
+      addFieldValue(name, entry.value, entry.isFilePath);
+    }
+  }
+
 protected:
   void updateFieldCountAndArrayFlags();
   std::expected<FieldValueMap::const_iterator, std::string>
   getFieldEntry(std::string fieldName) const {
     std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
-                   [](unsigned char c) { return std::toupper(c); });
+                   _caseTransform);
     auto fieldEntry = _fieldValueMap.find(fieldName);
     if (fieldEntry == _fieldValueMap.end()) {
       return std::unexpected(
@@ -105,10 +116,33 @@ protected:
     return fieldEntry;
   }
 
+  CaseTransformFunc _caseTransform{[](const unsigned char c) { return c; }};
   FieldValueMap _fieldValueMap{};
   std::uint32_t _fieldCount{0};
   bool _hasArrayFields{false};
   bool _hasFilePathFields{false};
+};
+
+class HeaderFields : public HttpFields {
+public:
+  HeaderFields()
+      : HttpFields({}, [](unsigned char c) {
+          return static_cast<unsigned char>(std::toupper(c));
+        }) {}
+
+  explicit HeaderFields(const FieldValueMap &fieldValueMap)
+      : HttpFields{fieldValueMap,
+                   [](unsigned char c) { return std::toupper(c); }} {}
+};
+
+class QueryFormFields : public HttpFields {
+public:
+  QueryFormFields() = default;
+
+  explicit QueryFormFields(const MultipartPayload &multipartPayload)
+      : HttpFields(multipartPayload) {}
+  explicit QueryFormFields(const FieldValueMap &queryFormData)
+      : HttpFields(queryFormData, [](auto c) { return c; }) {}
 };
 
 } // namespace medici::http

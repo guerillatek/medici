@@ -72,17 +72,17 @@ public:
   Expected onActive() override { return _eventHandlers.onActive(); }
 
   Expected onPayloadReady(TimePoint readTime) override {
-
     sockaddr_in remoteAddress{};
     socklen_t addrLen = sizeof(remoteAddress);
     int clientFd =
         accept(this->getConnectionManager().getSocketHandle(),
                reinterpret_cast<struct sockaddr *>(&remoteAddress), &addrLen);
     if (clientFd == -1) {
-      return std::unexpected(std::format(
-          "Failed to accept connection on listener endpoint, "
-          "name={}, error={}",
-          this->getConnectionManager().getConfig().name(), strerror(errno)));
+      return std::unexpected(
+          std::format("Failed to accept connection on listener endpoint, "
+                      "name={}, error={}, acceptTime={}",
+                      this->getConnectionManager().getConfig().name(),
+                      strerror(errno), readTime.time_since_epoch().count()));
     }
     char remoteIp[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &remoteAddress.sin_addr, remoteIp, sizeof(remoteIp));

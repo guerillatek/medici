@@ -35,7 +35,7 @@ public:
             },
             [this]() { return handleListenerActive(); },
             [this](http::HTTPAction action, const std::string &requestURI,
-                   const http::HttpFields &fields,
+                   const http::HeaderFields &fields,
                    const sockets::HttpServerPayloadT &payload, TimePoint tp) {
               return demuxRemoteHttpClientRequests(
                   action, requestURI, fields, payload, tp,
@@ -84,7 +84,7 @@ public:
 protected:
   http::SupportedCompression
   getAcceptedCompression(http::ContentType contentType,
-                         const http::HttpFields &requestHeaders) {
+                         const http::HeaderFields &requestHeaders) {
     // Determine if content type is worth compressing
     switch (contentType) {
     case http::ContentType::ImageJPEG:
@@ -115,7 +115,7 @@ protected:
   }
 
   Expected sendDirectoryListing(const std::string &directoryPath,
-                                const http::HttpFields &requestHeaders,
+                                const http::HeaderFields &requestHeaders,
                                 TimePoint tp,
                                 RemoteEndpointContextT &remoteEndpointContext) {
     auto directoryHeader = directoryPath.substr(_baseFilePath.length());
@@ -139,7 +139,7 @@ protected:
     listingHtml += "</ul></body></html>";
 
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
-        http::HttpFields{}, 200, "OK", listingHtml, http::ContentType::TextHtml,
+        http::HeaderFields{}, 200, "OK", listingHtml, http::ContentType::TextHtml,
         getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
   }
 
@@ -158,12 +158,12 @@ private:
   }
 
   Expected sendFileAsDownload(const std::string &filePath,
-                              const http::HttpFields &requestHeaders,
+                              const http::HeaderFields &requestHeaders,
                               TimePoint tp,
                               RemoteEndpointContextT &remoteEndpointContext) {
 
     // Create headers for download
-    http::HttpFields responseHeaders;
+    http::HeaderFields responseHeaders;
     auto fileName = std::filesystem::path{filePath}.filename().string();
     responseHeaders.addFieldValue(
         "Content-Disposition",
@@ -177,7 +177,7 @@ private:
 
   virtual Expected
   handleFileRequest(const std::string &filePath,
-                    const http::HttpFields &requestHeaders, TimePoint tp,
+                    const http::HeaderFields &requestHeaders, TimePoint tp,
                     RemoteEndpointContextT &remoteEndpointContext) {
 
     if (std::filesystem::is_directory(filePath)) {
@@ -199,13 +199,13 @@ private:
         filePath, sendResult.error());
 
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
-        http::HttpFields{}, 404, responseHtml, sendResult.error(),
+        http::HeaderFields{}, 404, responseHtml, sendResult.error(),
         http::ContentType::TextHtml, http::SupportedCompression::None);
   }
 
   virtual Expected demuxRemoteHttpClientRequests(
       http::HTTPAction action, const std::string &uriPath,
-      const http::HttpFields &requestHeaders,
+      const http::HeaderFields &requestHeaders,
       const sockets::HttpServerPayloadT &payload, TimePoint tp,
       RemoteEndpointContextT &remoteEndpointContext) {
 
@@ -226,12 +226,12 @@ private:
 
   virtual Expected
   handleRemoteHttpRequest(http::HTTPAction action, const std::string &uriPath,
-                          const http::HttpFields &requestHeaders,
+                          const http::HeaderFields &requestHeaders,
                           const sockets::HttpServerPayloadT &payload,
                           TimePoint tp,
                           RemoteEndpointContextT &remoteEndpointContext) {
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
-        http::HttpFields{}, 404,
+        http::HeaderFields{}, 404,
         "<html><body><h1>404 Not Found</h1><p>The requested resource was not "
         "found on this server.</p></body></html>",
         "Not Found", http::ContentType::TextHtml,

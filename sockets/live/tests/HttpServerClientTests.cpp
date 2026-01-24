@@ -15,7 +15,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
   bool formMultiPartCompressedSuccessful = false;
 
   Expected sendHttpResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compression =
@@ -30,7 +30,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
   }
 
   Expected sendFileResponse(
-      http::HttpFields headersValues, int responseCode = 200,
+      http::HeaderFields headersValues, int responseCode = 200,
       const std::string &message = "OK", std::string filePath = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compression =
@@ -45,7 +45,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
                                            contentType, compression);
   }
 
-  http::HttpFields headersReceivedOnServer{};
+  http::HeaderFields headersReceivedOnServer{};
   medici::sockets::IHttpClientEndpointPtr remoteClient;
 
   using RemoteListener =
@@ -70,7 +70,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
               return clientRunFunc();
             },
             [this](http::HTTPAction action, const std::string &requestURI,
-                   const http::HttpFields &fields,
+                   const http::HeaderFields &fields,
                    const sockets::HttpServerPayloadT &payload, TimePoint tp) {
               return HandleClientRequests(action, requestURI, fields, payload,
                                           tp);
@@ -89,7 +89,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
               return Expected{};
             }} {}
 
-  bool ValidateFormData(const http::HttpFields &payload) {
+  bool ValidateFormData(const http::QueryFormFields &payload) {
     if (payload.getFieldCount() < 3) {
       BOOST_FAIL(
           std::format("Multipart field count mismatch: expected 3 got {}",
@@ -120,7 +120,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     return true;
   }
 
-  bool ValidateMultiPartFormData(const http::HttpFields &payload) {
+  bool ValidateMultiPartFormData(const http::QueryFormFields &payload) {
     auto nonFileResult = ValidateFormData(payload);
     if (!nonFileResult) {
       return false;
@@ -148,7 +148,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
 
   Expected HandleClientRequests(http::HTTPAction action,
                                 const std::string &requestURI,
-                                const http::HttpFields &requestHeaders,
+                                const http::HeaderFields &requestHeaders,
                                 const sockets::HttpServerPayloadT &payload,
                                 TimePoint) {
     if (action == http::HTTPAction::GET &&
@@ -156,26 +156,26 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
       if (requestHeaders.HasField("Accept-Encoding")) {
         auto encoding = requestHeaders.getField("Accept-Encoding");
         if (encoding && encoding.value() == "gzip") {
-          http::HttpFields headers;
+          http::HeaderFields headers;
           headers.addFieldValue("Custom-Header", "LargeContentGzipped");
           return sendHttpResponse(headers, 200, "OK", largeContent,
                                   http::ContentType::AppJSON,
                                   http::SupportedCompression::GZip);
         } else if (encoding && encoding.value() == "br") {
-          http::HttpFields headers;
+          http::HeaderFields headers;
           headers.addFieldValue("Custom-Header", "LargeContentBrotli");
           return sendHttpResponse(headers, 200, "OK", largeContent,
                                   http::ContentType::AppJSON,
                                   http::SupportedCompression::Brotli);
         } else if (encoding && encoding.value() == "deflate") {
-          http::HttpFields headers;
+          http::HeaderFields headers;
           headers.addFieldValue("Custom-Header", "LargeContentDeflate");
           return sendHttpResponse(headers, 200, "OK", largeContent,
                                   http::ContentType::AppJSON,
                                   http::SupportedCompression::HttpDeflate);
         }
       } else {
-        http::HttpFields headers;
+        http::HeaderFields headers;
         headers.addFieldValue("Custom-Header", "LargeContentTest");
         return sendHttpResponse(headers, 200, "OK", largeContent,
                                 http::ContentType::AppJSON,
@@ -184,16 +184,16 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     }
     if (requestURI == "/testing/formTestPost" &&
         action == http::HTTPAction::POST) {
-      if (std::get_if<http::HttpFields>(&payload) == nullptr) {
-        BOOST_FAIL("Expected HttpFields payload");
-        return std::unexpected("Expected HttpFields payload");
+      if (std::get_if<http::QueryFormFields>(&payload) == nullptr) {
+        BOOST_FAIL("Expected QueryFormFields payload");
+        return std::unexpected("Expected QueryFormFields payload");
       }
-      auto &formPayload = std::get<http::HttpFields>(payload);
+      auto &formPayload = std::get<http::QueryFormFields>(payload);
 
       if (!ValidateFormData(formPayload)) {
         return std::unexpected("Form data validation failed");
       }
-      http::HttpFields headers;
+      http::HeaderFields headers;
       headers.addFieldValue("Custom-Header", "formPostResponse");
       return sendHttpResponse(headers, 200, "OK", "SUCCESS",
                               http::ContentType::TextPlain,
@@ -201,15 +201,15 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     }
     if (requestURI == "/testing/formTestGet" &&
         action == http::HTTPAction::GET) {
-      if (std::get_if<http::HttpFields>(&payload) == nullptr) {
-        BOOST_FAIL("Expected HttpFields payload");
-        return std::unexpected("Expected HttpFields payload");
+      if (std::get_if<http::QueryFormFields>(&payload) == nullptr) {
+        BOOST_FAIL("Expected QueryFormFields payload");
+        return std::unexpected("Expected QueryFormFields payload");
       }
-      auto &formPayload = std::get<http::HttpFields>(payload);
+      auto &formPayload = std::get<http::QueryFormFields>(payload);
       if (!ValidateFormData(formPayload)) {
         return std::unexpected("Form data validation failed");
       }
-      http::HttpFields headers;
+      http::HeaderFields headers;
       headers.addFieldValue("Custom-Header", "formGetResponse");
       return sendHttpResponse(headers, 200, "OK", "SUCCESS",
                               http::ContentType::TextPlain,
@@ -217,15 +217,15 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     }
     if (requestURI == "/testing/formTestMultipart" &&
         action == http::HTTPAction::POST) {
-      if (std::get_if<http::HttpFields>(&payload) == nullptr) {
-        BOOST_FAIL("Expected HttpFields payload");
-        return std::unexpected("Expected HttpFields payload");
+      if (std::get_if<http::QueryFormFields>(&payload) == nullptr) {
+        BOOST_FAIL("Expected QueryFormFields payload");
+        return std::unexpected("Expected QueryFormFields payload");
       }
-      auto &formPayload = std::get<http::HttpFields>(payload);
+      auto &formPayload = std::get<http::QueryFormFields>(payload);
       if (!ValidateMultiPartFormData(formPayload)) {
         return std::unexpected("Non File field form data validation failed");
       }
-      http::HttpFields headers;
+      http::HeaderFields headers;
       if (!requestHeaders.HasField("Content-Encoding")) {
         headers.addFieldValue("Custom-Header",
                               "formMultiPartResponseCompressed");
@@ -239,7 +239,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     return Expected{};
   }
 
-  Expected HandleServerResponse(const http::HttpFields &headers,
+  Expected HandleServerResponse(const http::HeaderFields &headers,
                                 std::string_view payload, int responseCode,
                                 TimePoint) {
     if (!headers.HasField("Custom-Header")) {
@@ -285,49 +285,49 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
 
   Expected StartTests() {
     remoteClient->setURIPath("/testing/largeContentRequest");
-    remoteClient->sendHttpRequest(http::HTTPAction::GET, http::HttpFields{}, "",
-                                  http::ContentType::Unspecified,
+    remoteClient->sendHttpRequest(http::HTTPAction::GET, http::HeaderFields{},
+                                  "", http::ContentType::Unspecified,
                                   http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
     remoteClient->setURIPath("/testing/largeContentRequest");
     remoteClient->sendHttpRequest(
-        http::HTTPAction::GET, http::HttpFields{}, "",
+        http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::GZip), true, false});
     remoteClient->sendHttpRequest(
-        http::HTTPAction::GET, http::HttpFields{}, "",
+        http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::Brotli), true,
             false});
     remoteClient->sendHttpRequest(
-        http::HTTPAction::GET, http::HttpFields{}, "",
+        http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::HttpDeflate), true,
             false});
-    http::HttpFields formData;
+    http::QueryFormFields formData;
     formData.addFieldValue("field1", "value1");
     formData.addFieldValue("field2", "value2");
     formData.addFieldValue("field3", "value3");
     remoteClient->setURIPath("/testing/formTestPost");
-    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
+    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
     remoteClient->setURIPath("/testing/formTestGet");
-    remoteClient->sendFormRequest(http::HTTPAction::GET, http::HttpFields{},
+    remoteClient->sendFormRequest(http::HTTPAction::GET, http::HeaderFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
     remoteClient->setURIPath("/testing/formTestMultipart");
     auto filePath =
         http::writeBufferToTempFile(largeContent, "testFile", ".json");
     formData.addFieldValue("bookJSON", filePath, true);
-    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
+    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
 
-    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HttpFields{},
+    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
                                   formData, http::SupportedCompression::GZip,
                                   sockets::HttpResponsePayloadOptions{});
 
@@ -372,7 +372,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     remoteClient =
         clientThreadContext->getSocketFactory().createHttpClientEndpoint(
             listenEndpoint,
-            [this](const http::HttpFields &headers, std::string_view payload,
+            [this](const http::HeaderFields &headers, std::string_view payload,
                    int responseCode, medici::TimePoint tp) {
               return HandleServerResponse(headers, payload, responseCode, tp);
             },
@@ -399,7 +399,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     remoteClient =
         clientThreadContext->getSocketFactory().createHttpsClientEndpoint(
             listenEndpoint,
-            [this](const http::HttpFields &headers, std::string_view payload,
+            [this](const http::HeaderFields &headers, std::string_view payload,
                    int responseCode, medici::TimePoint tp) {
               return HandleServerResponse(headers, payload, responseCode, tp);
             },

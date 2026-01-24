@@ -148,7 +148,9 @@ Expected decompressBrotliStreaming(std::string_view compressed,
           return handler_result;
         }
       }
-    }
+    } break;
+    case BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT:
+      return std::unexpected("Unexpected Brotli decompression state");
     };
   }
   BrotliDecoderDestroyInstance(state);

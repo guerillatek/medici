@@ -20,7 +20,6 @@ enum class HttpEndpointState {
   AwaitingUserRequest,   // Client only
   AwaitingClientRequest, // Server only
   AwaitingResponse,      // Client only
-  ReadingRequestMsgLine, // Server only
   ReadingHeaders,
   ReadingChunks,
   ReadingContent,
@@ -32,10 +31,10 @@ struct HttpResponseHeader {
   std::string message{"OK"};
 };
 using QueueContentT = std::variant<std::string, std::filesystem::path,
-                                   http::HttpFields, http::MultipartPayload>;
+                                   http::HeaderFields, http::MultipartPayload>;
 struct HttpSendQueueEntry {
   std::optional<http::HTTPAction> action;
-  http::HttpFields headersValues;
+  http::HeaderFields headersValues;
   std::optional<HttpResponseHeader>
       responseHeader; // For server side queued responses
   QueueContentT content;
@@ -132,7 +131,7 @@ public:
   void setURIPath(const std::string &path) { _uriPath = path; }
 
 protected:
-  Expected clarifySendHeaders(http::HttpFields &headersValues,
+  Expected clarifySendHeaders(http::HeaderFields &headersValues,
                               std::string_view content,
                               http::ContentType contentType,
                               http::SupportedCompression compression) {
@@ -488,7 +487,7 @@ protected:
         return dispatchPayload(epollTime);
       }
 
-      auto positionInBuff = payloadStream.tellg();
+      std::uint64_t positionInBuff = payloadStream.tellg();
       auto remainingPayloadSize = _activePayload.size() - positionInBuff;
       if (remainingPayloadSize < *_chunkSize) {
         std::copy(_activePayload.begin() + positionInBuff, _activePayload.end(),
@@ -581,7 +580,7 @@ protected:
         return dispatchPayload(epollTime);
       }
     }
-
+    _state = HttpEndpointState::ReadingHeaders;
     // We read a partial header line because the buffer
     // read didn't contain all the expected content
     return this->prependPartialContent(result.error().c_str(),
@@ -732,7 +731,7 @@ protected:
   std::string _uriPath;
   std::string _incomingURIPath;
   IncomingPayloadHandlerT _payLoadHandler;
-  http::HttpFields _activeHeaders{};
+  http::HeaderFields _activeHeaders{};
   std::optional<size_t> _contentSize{};
   std::optional<size_t> _chunkSize{};
   bool _chunkedResponse{false};

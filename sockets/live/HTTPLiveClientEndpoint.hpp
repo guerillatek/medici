@@ -16,7 +16,7 @@ class HTTPLiveClientEndpoint
 
   Expected applyAcceptedCompressions(
       const HttpResponsePayloadOptions &responsePayloadOptions,
-      http::HttpFields &headersValues) {
+      http::HeaderFields &headersValues) {
     if (responsePayloadOptions.acceptedCompressionsFlag != 0) {
       std::string acceptedCompressionEncodings;
       if (responsePayloadOptions.acceptedCompressionsFlag &
@@ -69,7 +69,7 @@ public:
       OnActiveHandlerT onActiveHandler)
       : BaseSocketEndpointT{config,
                             endpointPollManager,
-                            [this](const http::HttpFields &httpFields,
+                            [this](const http::HeaderFields &httpFields,
                                    std::string_view payload, TimePoint tp) {
                               auto result = _payloadHandler(
                                   httpFields, payload,
@@ -94,7 +94,7 @@ public:
         _payloadHandler{std::move(incomingPayloadHandler)} {}
 
   Expected sendHttpRequest(
-      http::HTTPAction action, http::HttpFields &&headersValues,
+      http::HTTPAction action, http::HeaderFields &&headersValues,
       std::string_view content = "",
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compression = http::SupportedCompression::None,
@@ -120,8 +120,8 @@ public:
   }
 
   Expected sendFormRequest(
-      http::HTTPAction action, http::HttpFields &&headersValues,
-      const http::HttpFields &formContent,
+      http::HTTPAction action, http::HeaderFields &&headersValues,
+      const http::QueryFormFields &formContent,
       http::SupportedCompression compression = http::SupportedCompression::None,
       HttpResponsePayloadOptions responsePayloadOptions = {}) override {
 
@@ -179,7 +179,7 @@ public:
           return result;
         }
         if (!queryString.empty()) {
-          this->setURIPath(this->_uriPath+"?"+queryString);
+          this->setURIPath(this->_uriPath + "?" + queryString);
         }
       } else {
         payload = expectedEncodedForm.value();

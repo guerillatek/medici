@@ -268,11 +268,11 @@ public:
                       this->getConfig().name()));
     }
 
-    size_t bytesWritten = SSL_write(
+    int bytesWritten = SSL_write(
         _sslSocket.get(), this->getOutboundBuffer().data() + _asyncBytesSent,
         this->getOutboundBuffer().size() - _asyncBytesSent);
 
-    if (bytesWritten < 0) {
+    if (bytesWritten <= 0) [[unlikely]] {
       auto result =
           onDisconnected("No bytes written on ssl read ... server likely "
                          "dropped connection");
