@@ -104,11 +104,10 @@ public:
         return std::unexpected{
             "AppRunContextManager: Invalid config type for IP context"};
       }
-      return std::make_shared<LiveIPShmEndpointContextT>(*ipConfig,
-                                                                    _clock);
+      return std::make_shared<LiveIPShmEndpointContextT>(*ipConfig, _clock);
     };
   }
-
+  
   Expected configureContexts(const ContextThreadConfigList &configs) {
     for (const auto &config : configs) {
       auto it = _contextFactoryRegistry.find(config->runContextType());

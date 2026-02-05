@@ -70,7 +70,7 @@ private:
   std::atomic<size_t> _tail{0};
   const std::uint32_t _queueSize;
   const std::uint32_t _channelIndex;
-  T _storage[];
+  T _storage[0];
 
 public:
   FixedConstructLenSPSC(std::uint32_t queueSize, std::uint32_t channelIndex)
@@ -184,7 +184,6 @@ template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
 
     // Multiprocess mutex for channel allocation synchronization
     pthread_mutex_t _allocationMutex;
-
     QueueChannelT _queueChannels[];
 
     SharedMemoryLayout(ShmQueueType queueType, std::uint32_t consumerCount,
@@ -218,7 +217,9 @@ template <typename... MessageTypes> struct SharedMemPODQueueDefinition {
     ~SharedMemoryLayout() { pthread_mutex_destroy(&_allocationMutex); }
 
     QueueChannelT &getQueueChannel(std::uint32_t consumerIndex) {
-      return const_cast<QueueChannelT &>( static_cast<const SharedMemoryLayout*>(this)->getQueueChannel(consumerIndex));
+      return const_cast<QueueChannelT &>(
+          static_cast<const SharedMemoryLayout *>(this)->getQueueChannel(
+              consumerIndex));
     }
 
     const QueueChannelT &getQueueChannel(std::uint32_t consumerIndex) const {
