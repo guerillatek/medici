@@ -81,6 +81,10 @@ public:
 
   auto &getListenEndpointConfig() const { return _listenEndpointConfig; }
 
+  auto &getThreadRunContext() {
+    return _serverEndpointListener.getThreadRunContext();
+  }
+
 protected:
   http::SupportedCompression
   getAcceptedCompression(http::ContentType contentType,
@@ -139,11 +143,12 @@ protected:
     listingHtml += "</ul></body></html>";
 
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
-        http::HeaderFields{}, 200, "OK", listingHtml, http::ContentType::TextHtml,
+        http::HeaderFields{}, 200, "OK", listingHtml,
+        http::ContentType::TextHtml,
         getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
   }
 
-private:
+protected:
   virtual Expected handleListenerActive() { return {}; }
 
   virtual Expected handleClosedListener(const std::string &reason,
@@ -181,6 +186,17 @@ private:
                     RemoteEndpointContextT &remoteEndpointContext) {
 
     if (std::filesystem::is_directory(filePath)) {
+
+      // Check for index.html in the directory and serve it if it exists
+      auto indexPath = std::filesystem::path{filePath} / "index.html";
+      if (std::filesystem::exists(indexPath) &&
+          std::filesystem::is_regular_file(indexPath)) {
+        return remoteEndpointContext.getEndpoint().sendFileResponse(
+            requestHeaders, 200, "OK", indexPath.string(),
+            http::ContentType::TextHtml,
+            getAcceptedCompression(http::ContentType::TextHtml,
+                                   requestHeaders));
+      }
       return sendDirectoryListing(filePath, requestHeaders, tp,
                                   remoteEndpointContext);
     }
@@ -224,11 +240,23 @@ private:
     };
   }
 
+  virtual Expected handleRemoteHttpFormRequest(
+      http::HTTPAction action, const std::string &uriPath,
+      const http::HeaderFields &requestHeaders,
+      const http::QueryFormFields &payload, TimePoint tp,
+      RemoteEndpointContextT &remoteEndpointContext) {
+    return remoteEndpointContext.getEndpoint().sendHttpResponse(
+        http::HeaderFields{}, 404,
+        "<html><body><h1>404 Not Found</h1><p>Cannot process "
+        "the submitted form data on this server.</p></body></html>",
+        "Not Found", http::ContentType::TextHtml,
+        getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
+  }
+
   virtual Expected
   handleRemoteHttpRequest(http::HTTPAction action, const std::string &uriPath,
                           const http::HeaderFields &requestHeaders,
-                          const sockets::HttpServerPayloadT &payload,
-                          TimePoint tp,
+                          const std::string_view &payload, TimePoint tp,
                           RemoteEndpointContextT &remoteEndpointContext) {
     return remoteEndpointContext.getEndpoint().sendHttpResponse(
         http::HeaderFields{}, 404,
@@ -236,6 +264,27 @@ private:
         "found on this server.</p></body></html>",
         "Not Found", http::ContentType::TextHtml,
         getAcceptedCompression(http::ContentType::TextHtml, requestHeaders));
+  }
+
+  Expected
+  handleRemoteHttpRequest(http::HTTPAction action, const std::string &uriPath,
+                          const http::HeaderFields &requestHeaders,
+                          const sockets::HttpServerPayloadT &payload,
+                          TimePoint tp,
+                          RemoteEndpointContextT &remoteEndpointContext) {
+    return std::visit(
+        [&](auto &&arg) -> Expected {
+          using PayloadType = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<PayloadType, http::QueryFormFields>) {
+            return handleRemoteHttpFormRequest(action, uriPath, requestHeaders,
+                                               arg, tp, remoteEndpointContext);
+          } else if constexpr (std::is_same_v<PayloadType, std::string_view>) {
+            return handleRemoteHttpRequest(action, uriPath, requestHeaders, arg,
+                                           tp, remoteEndpointContext);
+          }
+          return std::unexpected<std::string>{"Unsupported payload type"};
+        },
+        payload);
   }
 
   virtual Expected

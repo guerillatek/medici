@@ -21,10 +21,12 @@ namespace medici::application {
 
 template <sockets::SocketFactoryC SocketFactoryT, ClockNowC ClockNowT,
           EndpointEventPollMgrC EndpointEventPollMgrT,
+          std::uint32_t QueueEntryPayloadSize = 1024,
           std::uint32_t MaxProducerQueueSize = 2048>
 class IPAppRunContext : public IAppContext {
 public:
   using EventQueueT = event_queue::EventQueue<EndpointEventPollMgrT, ClockNowT,
+                                              QueueEntryPayloadSize,
                                               MaxProducerQueueSize>;
   using TimerFactoryT = timers::TimerFactory<EventQueueT>;
   template <typename... Args>

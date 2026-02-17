@@ -71,6 +71,8 @@ public:
 
   auto &getEndpointCoordinator() { return _remoteEndpointCoordinator; }
 
+  auto &getThreadRunContext() { return _threadRunContext; }
+
   using RemoteEndpointCoordinatorT =
       GroupEndpointCoordinator<EndpointT, ExtendedContextData>;
 

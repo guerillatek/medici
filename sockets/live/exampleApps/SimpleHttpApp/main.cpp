@@ -2,7 +2,6 @@
 #include "medici/cryptoUtils/OpenSSLUtils.hpp"
 #include "medici/http/writeBufferToTempFile.hpp"
 #include "medici/sockets/live/HttpServerHandler.hpp"
-
 #include "medici/sockets/live/testCredentials/sslTestCerts.hpp"
 #include "medici/time.hpp"
 
@@ -28,10 +27,13 @@ int main() {
   Expected sslInitialization = crypto_utils::OpenSSLUtils::initSSL();
 
   std::string serverCertFilePath = http::writeBufferToTempFile(
-      std::string_view{serverCertificate}, "serverCert", ".pem");
+      std::string_view{
+          medici::sockets::live::test_credentials::serverCertificate},
+      "serverCert", ".pem");
 
   std::string serverKeyFilePath = http::writeBufferToTempFile(
-      std::string_view{serverKey}, "serverKey", ".key");
+      std::string_view{medici::sockets::live::test_credentials::serverKey},
+      "serverKey", ".key");
 
   using AppRunContextManagerT = medici::application::AppRunContextManager<>;
   AppRunContextManagerT runContextManager;

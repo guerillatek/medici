@@ -14,6 +14,10 @@ namespace medici::event_queue {
 using Expected = std::expected<void, std::string>;
 using AsyncExpected = std::expected<bool, std::string>;
 using CallableT = std::function<Expected()>;
+struct PostEntry {
+  CallableT action;
+  std::function<void()> payloadDeleteFunction;
+};
 using AsyncCallableT = std::function<AsyncExpected()>;
 
 class IEventQueue {

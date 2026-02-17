@@ -46,17 +46,17 @@ template <std::uint32_t PayloadSize, std::uint32_t MaxProducerQueueSize>
 class ThreadSpecificQueue {
 public:
   using QueueT = boost::lockfree::spsc_queue<
-      CallableT, boost::lockfree::capacity<MaxProducerQueueSize>>;
+      PostEntry, boost::lockfree::capacity<MaxProducerQueueSize>>;
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
 
   void push(CallableC auto &&action) {
-    while (!(_queue.push(action)))
+    while (!(_queue.push(PostEntry{action, _payLoadDeleteFunction})))
       ;
-    _payloadEngaged = false;
+    _payLoadDeleteFunction = {};
   }
   auto empty() { return _queue.empty(); }
 
-  void pop(CallableT &poppedEntry) {
+  void pop(PostEntry &poppedEntry) {
     while (!_queue.pop(poppedEntry))
       ;
   }
@@ -64,36 +64,37 @@ public:
   auto &front() { return _queue.front(); }
 
   ExpectedBuffer getNextActionPayload() {
-    if (_payloadEngaged) {
+    if (_payLoadDeleteFunction) {
       return std::unexpected(
           "Action payload already engaged for next queue entry");
     }
     auto dataPtr = _localPayloads[_nextActionPayload].data();
-    _payloadEngaged = true;
     ++_nextActionPayload %= MaxProducerQueueSize;
+    _payLoadDeleteFunction = []() {
+    }; // Set to empty function to indicate payload is engaged
     return dataPtr;
   }
 
   template <typename T, typename... ConstructorArgs>
   ExpectedObject<T> getNextActionObject(ConstructorArgs &&...args) {
-    if (sizeof(T) > PayloadSize) {
-      return std::unexpected(
-          std::format("Request for next action object exceeds size={} of queue "
-                      "entry payload",
-                      PayloadSize));
+    if constexpr (sizeof(T) > PayloadSize) {
+      static_assert(false,
+                    "Requested action object type exceeds size of queue entry "
+                    "payload");
     }
     auto bufferResult = getNextActionPayload();
     if (!bufferResult) {
       return std::unexpected(bufferResult.error());
     }
-    T *object =
-        new (bufferResult.value()) T(std::forward<ConstructorArgs>(args)...);
+    auto object = reinterpret_cast<T *>(bufferResult.value());
+    std::construct_at(object, std::forward<ConstructorArgs>(args)...);
+    _payLoadDeleteFunction = [object]() { std::destroy_at(object); };
     return object;
   }
 
 private:
   size_t _nextActionPayload{};
-  bool _payloadEngaged;
+  std::function<void()> _payLoadDeleteFunction;
   QueueT _queue;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
 };
@@ -111,7 +112,7 @@ class EventQueue : public IEventQueue {
   };
 
   using ExternalThreadProducerQueue = std::vector<ThreadQueuePair>;
-  using LocalAsyncQueue = std::deque<CallableT>;
+  using LocalAsyncQueue = std::deque<PostEntry>;
   using TimedEventQueue =
       std::priority_queue<PrioritizedCallable, std::vector<PrioritizedCallable>,
                           std::greater<PrioritizedCallable>>;
@@ -128,12 +129,11 @@ public:
 
   ExpectedBuffer getNextActionPayload() {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
-      if (_payloadEngaged) {
+      if (_payLoadDeleteFunction) {
         return std::unexpected(
             "Action payload already engaged for next queue entry");
       }
       auto dataPtr = _localPayloads[_nextActionPayload].data();
-      _payloadEngaged = true;
       ++_nextActionPayload %= MaxProducerQueueSize;
       return dataPtr;
     }
@@ -148,18 +148,18 @@ public:
   template <typename T, typename... ConstructorArgs>
   ExpectedObject<T> getNextActionObject(ConstructorArgs &&...args) {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
-      if (sizeof(T) > PayloadSize) {
-        return std::unexpected(
-            std::format("Request for next object on local async queue exceeds "
-                        "size={} of queue entry payload",
-                        PayloadSize));
+      if constexpr (sizeof(T) > PayloadSize) {
+        static_assert(
+            false, "Requested action object type exceeds size of queue entry "
+                   "payload");
       }
       auto bufferResult = getNextActionPayload();
       if (!bufferResult) {
         return std::unexpected(bufferResult.error());
       }
-      T *object =
-          new (bufferResult.value()) T(std::forward<ConstructorArgs>(args)...);
+      auto object = reinterpret_cast<T *>(bufferResult.value());
+      std::construct_at(object, std::forward<ConstructorArgs>(args)...);
+      _payLoadDeleteFunction = [object]() { std::destroy_at(object); };
       return object;
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -176,7 +176,8 @@ public:
       if (_localEventQueue.size() == MaxProducerQueueSize) {
         return std::unexpected("Local Async event queue has reached capacity");
       }
-      _localEventQueue.emplace_back(CallableT{std::move(action)});
+      _localEventQueue.emplace_back(
+          PostEntry{std::move(action), _payLoadDeleteFunction});
       return {};
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -189,6 +190,12 @@ public:
   }
 
   template <AsyncCallableC T> Expected postAsyncAction(T &&action) {
+
+    if (_payLoadDeleteFunction) {
+      _payLoadDeleteFunction = {};
+      return std::unexpected(
+          "Thread local payloads are not supported for async actions!!");
+    }
     auto asyncCallableWrapper = [action = std::move(action),
                                  this]() mutable -> Expected {
       auto result = action();
@@ -217,6 +224,11 @@ public:
 
   template <CallableC T>
   Expected postPrecisionTimedAction(TimePoint timePoint, T &&action) {
+    if (_payLoadDeleteFunction) {
+      _payLoadDeleteFunction = {};
+      return std::unexpected(
+          "Thread local payloads are not supported for timed events!!");
+    }
     if (_clock() > timePoint) {
       return std::unexpected(std::format(
           "Posting timed action for expired time={}, currentTime={}", timePoint,
@@ -322,10 +334,13 @@ private:
 
     // Check for async operations on local queue
     if (!_localEventQueue.empty()) {
-      if (!_localEventQueue.front()) {
+      if (!_localEventQueue.front().action) {
         return std::unexpected("Empty action placed on local async queue");
       }
-      auto result = _localEventQueue.front()();
+      auto result = _localEventQueue.front().action();
+      if (_localEventQueue.front().payloadDeleteFunction) {
+        _localEventQueue.front().payloadDeleteFunction();
+      }
       _localEventQueue.pop_front();
       ++dispatchedEvents;
       if (!result) {
@@ -342,13 +357,16 @@ private:
       auto &producerQueue = producerQueueEntry.producerQueue;
 
       if (!producerQueue.empty()) {
-        CallableT queueEntry{};
+        PostEntry queueEntry{};
         producerQueue.pop(queueEntry);
-        if (!queueEntry) {
+        if (!queueEntry.action) {
           return std::unexpected(
               "Empty action placed on external producer queue");
         }
-        auto result = queueEntry();
+        auto result = queueEntry.action();
+        if (queueEntry.payloadDeleteFunction) {
+          queueEntry.payloadDeleteFunction();
+        }
         ++dispatchedEvents;
         if (!result) {
           return result;
@@ -438,7 +456,7 @@ private:
   size_t _nextActionPayload{};
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
-  bool _payloadEngaged{false};
+  std::function<void()> _payLoadDeleteFunction;
 };
 
 } // namespace medici::event_queue

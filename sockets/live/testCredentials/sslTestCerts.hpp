@@ -1,3 +1,6 @@
+
+namespace medici::sockets::live::test_credentials {
+
 static const char *serverCertificate =
     R"(-----BEGIN CERTIFICATE-----
 MIIDQzCCAiugAwIBAgIUBlXak0xIKzmQTVnomuKfK3hHPqIwDQYJKoZIhvcNAQEL
@@ -51,3 +54,5 @@ XVAG1BMcz5nVOLEuj0/3zs0DpeZsrP6Yjjh8dpw+lTOxYhTn4vaO9eoTUuhudl5O
 G5FaAdy+N4b+u2mFrlGzb1mG
 -----END PRIVATE KEY-----
 )";
+
+} // namespace medici::sockets::live::test_credentials

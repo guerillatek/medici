@@ -57,7 +57,8 @@ public:
 using ContextThreadConfigList = std::vector<ContextThreadConfigPtr>;
 
 template <std::uint32_t ServiceRequestQueueSize = 256,
-          std::uint32_t PublisherQueueSize = 1024>
+          std::uint32_t PublisherQueueSize = 1024,
+          std::uint32_t QueueEntryPayloadSize = 1024>
 class AppRunContextManager {
 
   using IAppContextPtr = std::shared_ptr<IAppContext>;
@@ -78,13 +79,17 @@ class AppRunContextManager {
   };
 
 public:
-  using LiveIPEndpointContextT = IPAppRunContext<
-      medici::sockets::live::LiveSocketFactory, medici::SystemClockNow,
-      medici::sockets::live::IPEndpointPollManager, ServiceRequestQueueSize>;
+  using LiveIPEndpointContextT =
+      IPAppRunContext<medici::sockets::live::LiveSocketFactory,
+                      medici::SystemClockNow,
+                      medici::sockets::live::IPEndpointPollManager,
+                      QueueEntryPayloadSize, ServiceRequestQueueSize>;
 
-  using LiveIPShmEndpointContextT = IPAppRunContext<
-      medici::sockets::live::LiveSocketFactory, medici::SystemClockNow,
-      IPEndpointPollManagerWithShmSupport, ServiceRequestQueueSize>;
+  using LiveIPShmEndpointContextT =
+      IPAppRunContext<medici::sockets::live::LiveSocketFactory,
+                      medici::SystemClockNow,
+                      IPEndpointPollManagerWithShmSupport,
+                      QueueEntryPayloadSize, ServiceRequestQueueSize>;
 
   AppRunContextManager() {
     _contextFactoryRegistry["LiveIPEndpointContext"] =
@@ -107,7 +112,7 @@ public:
       return std::make_shared<LiveIPShmEndpointContextT>(*ipConfig, _clock);
     };
   }
-  
+
   Expected configureContexts(const ContextThreadConfigList &configs) {
     for (const auto &config : configs) {
       auto it = _contextFactoryRegistry.find(config->runContextType());
