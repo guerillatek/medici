@@ -55,6 +55,18 @@ public:
     }
   }
 
+  Expected setFieldValue(std::string fieldName, const std::string &value) {
+    std::transform(fieldName.begin(), fieldName.end(), fieldName.begin(),
+                   _caseTransform);
+    auto fieldEntry = _fieldValueMap.find(fieldName);
+    if (fieldEntry == _fieldValueMap.end()) {
+      return std::unexpected(
+          std::format("Attempted to set unknown form field,'{}'", fieldName));
+    }
+    fieldEntry->second.value = value;
+    return {};
+  }
+
   auto encodeAsQueryString() const {
     return FieldContentUtils::encodeFieldsToURL(_fieldValueMap);
   }

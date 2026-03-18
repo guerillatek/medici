@@ -70,7 +70,7 @@ private:
   std::atomic<size_t> _tail{0};
   const std::uint32_t _queueSize;
   const std::uint32_t _channelIndex;
-  T _storage[0];
+  T _storage[];
 
 public:
   FixedConstructLenSPSC(std::uint32_t queueSize, std::uint32_t channelIndex)

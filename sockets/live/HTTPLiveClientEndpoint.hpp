@@ -110,9 +110,10 @@ public:
       return result;
     }
     auto canSend = this->_sendQueue.empty();
-    this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
-                                  std::string{content}, compression,
-                                  this->_uriPath, responsePayloadOptions);
+    this->_uriPathWithQueryParams = this->_uriPath;
+    this->_sendQueue.emplace_back(
+        action, headersValues, std::nullopt, std::string{content}, compression,
+        this->_uriPathWithQueryParams, responsePayloadOptions);
     if (canSend) {
       return this->sendQueuedHttpData();
     }
@@ -157,9 +158,9 @@ public:
         return result;
       }
 
-      this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
-                                    multipartPayload, compression,
-                                    this->_uriPath, responsePayloadOptions);
+      this->_sendQueue.emplace_back(
+          action, headersValues, std::nullopt, multipartPayload, compression,
+          this->_uriPathWithQueryParams, responsePayloadOptions);
 
     } else {
       // No file content so encode as URL encoded form
@@ -179,7 +180,9 @@ public:
           return result;
         }
         if (!queryString.empty()) {
-          this->setURIPath(this->_uriPath + "?" + queryString);
+          this->_uriPathWithQueryParams = this->_uriPath + "?" + queryString;
+        } else {
+          this->_uriPathWithQueryParams = this->_uriPath;
         }
       } else {
         payload = expectedEncodedForm.value();
@@ -197,9 +200,9 @@ public:
         return result;
       }
 
-      this->_sendQueue.emplace_back(action, headersValues, std::nullopt,
-                                    payload, compression, this->_uriPath,
-                                    responsePayloadOptions);
+      this->_sendQueue.emplace_back(
+          action, headersValues, std::nullopt, payload, compression,
+          this->_uriPathWithQueryParams, responsePayloadOptions);
     }
 
     if (canSend) {

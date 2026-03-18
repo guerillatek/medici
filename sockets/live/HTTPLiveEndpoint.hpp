@@ -194,7 +194,7 @@ protected:
     auto &content = activeQueueEntry.content;
     auto &compressionEncoding = activeQueueEntry.compression;
     auto action = activeQueueEntry.action;
-    _uriPath = activeQueueEntry.uriPath;
+    _uriPathWithQueryParams = activeQueueEntry.uriPath;
     _responsePayloadOptions = activeQueueEntry.responsePayloadOptions;
     _compressedData.clear();
 
@@ -306,7 +306,7 @@ protected:
     } else {
       // Send a Request
       auto result = headersValues.encodeFieldsToRequestHeader(
-          *action, _uriPath, this->getConfig().host());
+          *action, _uriPathWithQueryParams, this->getConfig().host());
       if (!result) {
         return std::unexpected(std::format(
             "Failed to encode HTTP request header: error={}", result.error()));
@@ -729,6 +729,7 @@ protected:
   std::unique_ptr<std::ifstream> _activeFileStream{};
   HttpSendQueue _sendQueue{};
   std::string _uriPath;
+  std::string _uriPathWithQueryParams;
   std::string _incomingURIPath;
   IncomingPayloadHandlerT _payLoadHandler;
   http::HeaderFields _activeHeaders{};

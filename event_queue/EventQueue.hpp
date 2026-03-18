@@ -50,9 +50,15 @@ public:
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
 
   void push(CallableC auto &&action) {
-    while (!(_queue.push(PostEntry{action, _payLoadDeleteFunction})))
+    if (_preparedEntry) {
+      _preparedEntry->action = std::move(action);
+      while (!_queue.push(*_preparedEntry))
+        ;
+      _preparedEntry.reset();
+      return;
+    }
+    while (!(_queue.push(PostEntry{action, {}})))
       ;
-    _payLoadDeleteFunction = {};
   }
   auto empty() { return _queue.empty(); }
 
@@ -63,15 +69,22 @@ public:
 
   auto &front() { return _queue.front(); }
 
+  void pop_front() {
+    PostEntry entry;
+    pop(entry);
+  }
+
   ExpectedBuffer getNextActionPayload() {
-    if (_payLoadDeleteFunction) {
+    while (!_queue.write_available())
+      ;
+    if (_preparedEntry) {
+      _preparedEntry.reset();
       return std::unexpected(
           "Action payload already engaged for next queue entry");
     }
     auto dataPtr = _localPayloads[_nextActionPayload].data();
     ++_nextActionPayload %= MaxProducerQueueSize;
-    _payLoadDeleteFunction = []() {
-    }; // Set to empty function to indicate payload is engaged
+    _preparedEntry = PostEntry{{}, {}};
     return dataPtr;
   }
 
@@ -88,13 +101,15 @@ public:
     }
     auto object = reinterpret_cast<T *>(bufferResult.value());
     std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-    _payLoadDeleteFunction = [object]() { std::destroy_at(object); };
+    _preparedEntry->payloadDeleteFunction = [object]() {
+      std::destroy_at(object);
+    };
     return object;
   }
 
 private:
   size_t _nextActionPayload{};
-  std::function<void()> _payLoadDeleteFunction;
+  std::optional<PostEntry> _preparedEntry{};
   QueueT _queue;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
 };
@@ -129,13 +144,14 @@ public:
 
   ExpectedBuffer getNextActionPayload() {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
-      if (_payLoadDeleteFunction) {
+      if (_preparedEntry) {
         return std::unexpected(
             "Action payload already engaged for next queue entry");
       }
-      auto dataPtr = _localPayloads[_nextActionPayload].data();
-      ++_nextActionPayload %= MaxProducerQueueSize;
-      return dataPtr;
+      if (_localEventQueue.size() == MaxProducerQueueSize) {
+        return std::unexpected("Local Async event queue has reached capacity "
+                               "Next action payload cannot be allocated");
+      }
     }
     auto findResult = getThreadProducerQueueEntry();
     if (!findResult) {
@@ -153,13 +169,24 @@ public:
             false, "Requested action object type exceeds size of queue entry "
                    "payload");
       }
+      if (_preparedEntry) {
+        return std::unexpected(
+            "Next Action object already engaged for next queue entry");
+      }
+      if (_localEventQueue.size() == MaxProducerQueueSize) {
+        return std::unexpected("Local Async event queue has reached capacity "
+                               "Next action object cannot be allocated");
+      }
+
       auto bufferResult = getNextActionPayload();
       if (!bufferResult) {
         return std::unexpected(bufferResult.error());
       }
       auto object = reinterpret_cast<T *>(bufferResult.value());
       std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-      _payLoadDeleteFunction = [object]() { std::destroy_at(object); };
+      _preparedEntry->payloadDeleteFunction = [object]() {
+        std::destroy_at(object);
+      };
       return object;
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -176,8 +203,15 @@ public:
       if (_localEventQueue.size() == MaxProducerQueueSize) {
         return std::unexpected("Local Async event queue has reached capacity");
       }
-      _localEventQueue.emplace_back(
-          PostEntry{std::move(action), _payLoadDeleteFunction});
+
+      if (_preparedEntry) {
+        _preparedEntry->action = std::move(action);
+        _localEventQueue.emplace_back(*_preparedEntry);
+        _preparedEntry.reset();
+        return {};
+      }
+
+      _localEventQueue.emplace_back(PostEntry{std::move(action), {}});
       return {};
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -191,8 +225,7 @@ public:
 
   template <AsyncCallableC T> Expected postAsyncAction(T &&action) {
 
-    if (_payLoadDeleteFunction) {
-      _payLoadDeleteFunction = {};
+    if (_preparedEntry) {
       return std::unexpected(
           "Thread local payloads are not supported for async actions!!");
     }
@@ -224,8 +257,8 @@ public:
 
   template <CallableC T>
   Expected postPrecisionTimedAction(TimePoint timePoint, T &&action) {
-    if (_payLoadDeleteFunction) {
-      _payLoadDeleteFunction = {};
+    if (_preparedEntry) {
+      _preparedEntry.reset();
       return std::unexpected(
           "Thread local payloads are not supported for timed events!!");
     }
@@ -314,11 +347,12 @@ private:
     size_t dispatchedEvents = 0;
     while (!_precisionTimedEvents.empty() &&
            (_precisionTimedEvents.top().eventTime() <= _clock())) {
-      auto eventResult = _precisionTimedEvents.top().applyAction();
+      auto topAction = _precisionTimedEvents.top();
+      auto eventResult = topAction.applyAction();
+      _precisionTimedEvents.pop();
       if (!eventResult) {
         return eventResult;
       }
-      _precisionTimedEvents.pop();
       ++dispatchedEvents;
     }
 
@@ -340,6 +374,7 @@ private:
       auto result = _localEventQueue.front().action();
       if (_localEventQueue.front().payloadDeleteFunction) {
         _localEventQueue.front().payloadDeleteFunction();
+        _localEventQueue.front().payloadDeleteFunction = {};
       }
       _localEventQueue.pop_front();
       ++dispatchedEvents;
@@ -357,17 +392,13 @@ private:
       auto &producerQueue = producerQueueEntry.producerQueue;
 
       if (!producerQueue.empty()) {
-        PostEntry queueEntry{};
-        producerQueue.pop(queueEntry);
-        if (!queueEntry.action) {
-          return std::unexpected(
-              "Empty action placed on external producer queue");
-        }
-        auto result = queueEntry.action();
-        if (queueEntry.payloadDeleteFunction) {
-          queueEntry.payloadDeleteFunction();
+        auto result = producerQueue.front().action();
+        if (producerQueue.front().payloadDeleteFunction) {
+          producerQueue.front().payloadDeleteFunction();
+          producerQueue.front().payloadDeleteFunction = {};
         }
         ++dispatchedEvents;
+        producerQueue.pop_front();
         if (!result) {
           return result;
         }
@@ -456,7 +487,7 @@ private:
   size_t _nextActionPayload{};
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
-  std::function<void()> _payLoadDeleteFunction;
+  std::optional<PostEntry> _preparedEntry{};
 };
 
 } // namespace medici::event_queue

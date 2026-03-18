@@ -44,10 +44,10 @@ public:
       http::SupportedCompression compression =
           http::SupportedCompression::None) override {
     auto canSend = this->_sendQueue.empty();
-    this->_sendQueue.emplace_back(std::nullopt, headersValues,
-                                  HttpResponseHeader{responseCode, message},
-                                  std::string{content}, compression,
-                                  this->_uriPath, HttpResponsePayloadOptions{});
+    this->_sendQueue.emplace_back(
+        std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
+        std::string{content}, compression, this->_uriPathWithQueryParams,
+        HttpResponsePayloadOptions{});
     if (!canSend) {
       return {};
     }
@@ -67,10 +67,11 @@ public:
         !std::filesystem::is_regular_file(targetContent)) {
       return std::unexpected(std::format("file '{}' does not exist", filePath));
     }
-    this->_sendQueue.emplace_back(std::nullopt, headersValues,
-                                  HttpResponseHeader{responseCode, message},
-                                  targetContent, compressed, this->_uriPath,
-                                  HttpResponsePayloadOptions{});
+    this->_uriPathWithQueryParams = this->_uriPath;
+    this->_sendQueue.emplace_back(
+        std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
+        targetContent, compressed, this->_uriPathWithQueryParams,
+        HttpResponsePayloadOptions{});
     if (!canSend) {
       return {};
     }
