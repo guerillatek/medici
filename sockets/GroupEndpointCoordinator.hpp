@@ -13,9 +13,9 @@ template <typename EndpointT,
           typename ExtendedContextData = NoExtendedContextData>
 class GroupEndpointCoordinator {
 public:
-  using CallbackContextT =
-      EndpointCallbackContext<EndpointT, GroupEndpointCoordinator<EndpointT>,
-                              ExtendedContextData>;
+  using CallbackContextT = EndpointCallbackContext<
+      EndpointT, GroupEndpointCoordinator<EndpointT, ExtendedContextData>,
+      ExtendedContextData>;
 
   using CallbackContextPtr = std::unique_ptr<CallbackContextT>;
   using EndpointContextLookup =
@@ -35,7 +35,6 @@ public:
         _disconnectedHandlerT{disconnectedHandlerT},
         _onActiveHandler{onActiveHandler} {}
 
-  template <typename... ArgsT>
   Expected registerEndpoint(const auto &config,
                             IIPEndpointPollManager &endpointPollManager,
                             int fd) {
@@ -51,6 +50,28 @@ public:
         return std::unexpected(
             std::format("Endpoint with endpointId={}, fd={} already registered",
                         endpointId, fd));
+      }
+      _activeContextEntry = it;
+    } catch (const std::exception &ex) {
+      return std::unexpected(std::format(
+          "Failed to create remote endpoint context  error={}", ex.what()));
+    }
+    return {};
+  }
+
+  Expected createEndpoint(const auto &config,
+                          IIPEndpointPollManager &endpointPollManager) {
+    try {
+      auto context = std::make_unique<CallbackContextT>(
+          *this, config, endpointPollManager, _incomingPayloadHandler,
+          _outgoingPayloadHandler, _closeHandler, _disconnectedHandlerT,
+          _onActiveHandler);
+      auto endpointId = context->getEndpoint().getEndpointUniqueId();
+      auto [it, inserted] =
+          _contextLookup.emplace(endpointId, std::move(context));
+      if (!inserted) {
+        return std::unexpected(std::format(
+            "Endpoint with endpointId={} is already registered", endpointId));
       }
       _activeContextEntry = it;
     } catch (const std::exception &ex) {
@@ -104,6 +125,8 @@ public:
     });
     return {};
   }
+
+  bool empty() const { return _contextLookup.empty(); }
 
 private:
   PayloadHandlerT _incomingPayloadHandler;

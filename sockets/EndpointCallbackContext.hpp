@@ -94,8 +94,9 @@ public:
             std::forward<ArgsT>(args)...,
             config,
             endpointPollManager,
-            [this, &incomingPayloadHandler](const http::HeaderFields &httpFields,
-                                            auto payload, int ec, auto tp) {
+            [this,
+             &incomingPayloadHandler](const http::HeaderFields &httpFields,
+                                      auto payload, int ec, auto tp) {
               this->_endPointCoordinator.setActiveEndpoint(
                   _endpoint.getEndpointUniqueId());
               return incomingPayloadHandler(httpFields, payload, ec, tp);
@@ -235,17 +236,20 @@ public:
 
   auto &getEndpoint() const { return _endpoint; }
   auto &getEndpoint() { return _endpoint; }
+  auto getEndpointId() const { return _endpoint.getEndpointUniqueId(); }
 
 private:
   EndpointT _endpoint;
 };
 
-struct NoExtendedContextData {};
+struct NoExtendedContextData {
+  template <typename... ArgsT> NoExtendedContextData(ArgsT &&...) {}
+};
 template <typename EndpointT, typename CoordinatorT,
           typename ExtendedContextData = NoExtendedContextData>
 class EndpointCallbackContext
     : public CallbackBaseSelect<EndpointT, CoordinatorT>,
-      ExtendedContextData {
+      public ExtendedContextData {
 public:
   using SelectedBase = CallbackBaseSelect<EndpointT, CoordinatorT>;
   template <typename... ArgsT>
@@ -261,7 +265,8 @@ public:
                      endpointPollManager,         incomingPayloadHandler,
                      outgoingPayloadHandler,      closeHandler,
                      disconnectedHandler,         onActiveHandler,
-                     std::forward<ArgsT>(args)...} {}
+                     std::forward<ArgsT>(args)...},
+        NoExtendedContextData{this->getEndpoint()} {}
 };
 
 } // namespace medici::sockets
