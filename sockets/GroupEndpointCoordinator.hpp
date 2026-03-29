@@ -109,6 +109,14 @@ public:
     return activeContext;
   }
 
+  auto &getContext(std::uint64_t endpointId) {
+    if (!_contextLookup.contains(endpointId)) {
+      throw std::runtime_error(
+          std::format("Endpoint with id={} not found", endpointId));
+    }
+    return *(_contextLookup.find(endpointId)->second.get());
+  }
+
   Expected forEachEndpoint(auto &&callback) {
     for (auto &[fd, contextPtr] : _contextLookup) {
       auto &context = *contextPtr;
