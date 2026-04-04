@@ -37,7 +37,7 @@ public:
     }
   };
 
-  WebSocketLiveEndpoint(const WSEndpointConfig &config,
+  WebSocketLiveEndpoint(const medici::sockets::WSEndpointConfigC auto &config,
                         IIPEndpointPollManager &endpointPollManager,
                         WebSocketPayloadHandlerC auto &&incomingPayloadHandler,
                         WebSocketPayloadHandlerC auto &&outgoingPayloadHandler,

@@ -191,8 +191,7 @@ class CallbackBaseSelect<EndpointT, CoordinatorT>
     : public EndpointCallbackBaseMembers<EndpointT, CoordinatorT> {
 public:
   template <typename... ArgsT>
-  CallbackBaseSelect(CoordinatorT &endPointCoordinator,
-                     const IPEndpointConfig &config,
+  CallbackBaseSelect(CoordinatorT &endPointCoordinator, const auto &config,
                      IIPEndpointPollManager &endpointPollManager,
                      WebSocketPayloadHandlerC auto &incomingPayloadHandler,
                      WebSocketPayloadHandlerC auto &outgoingPayloadHandler,
@@ -253,8 +252,7 @@ class EndpointCallbackContext
 public:
   using SelectedBase = CallbackBaseSelect<EndpointT, CoordinatorT>;
   template <typename... ArgsT>
-  EndpointCallbackContext(CoordinatorT &endPointCoordinator,
-                          const IPEndpointConfig &config,
+  EndpointCallbackContext(CoordinatorT &endPointCoordinator, const auto &config,
                           IIPEndpointPollManager &endpointPollManager,
                           auto &incomingPayloadHandler,
                           auto &outgoingPayloadHandler,
@@ -266,7 +264,7 @@ public:
                      outgoingPayloadHandler,      closeHandler,
                      disconnectedHandler,         onActiveHandler,
                      std::forward<ArgsT>(args)...},
-        NoExtendedContextData{this->getEndpoint()} {}
+        ExtendedContextData{this->getEndpoint()} {}
 };
 
 } // namespace medici::sockets

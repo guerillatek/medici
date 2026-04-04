@@ -107,13 +107,13 @@ public:
       : HttpEndpointConfig(name, host, port, uri),
         _perMessageDeflate{perMessageDeflate} {}
 
-  WSEndpointConfig(const WSEndpointConfigC auto &config)
-      : HttpEndpointConfig{config},
-        _perMessageDeflate{config.perMessageDeflate()} {}
-
   WSEndpointConfig(const HTTPEndpointConfigC auto &config,
                    const std::string &uri = "")
-      : HttpEndpointConfig{config}, _perMessageDeflate{uri} {}
+      : HttpEndpointConfig{config}, _perMessageDeflate{false} {
+    if constexpr (WSEndpointConfigC<decltype(config)>) {
+      _perMessageDeflate = config.perMessageDeflate();
+    }
+  }
 
   bool perMessageDeflate() const { return _perMessageDeflate; }
 };
