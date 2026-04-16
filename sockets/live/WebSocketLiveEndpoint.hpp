@@ -159,7 +159,9 @@ public:
   Expected clientSendFramedPayload(WSOpCode opCode, std::string_view payload) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    if (_deflateEnabled) {
+    const bool compressed = _deflateEnabled && (opCode == WSOpCode::Text ||
+                                                opCode == WSOpCode::Binary);
+    if (compressed) {
       if (auto deflatedResult =
               compressPayload(payload, http::SupportedCompression::WSDeflate,
                               this->getCompressedDataBuffer());
@@ -175,7 +177,8 @@ public:
 
     auto payloadSize = static_cast<uint16_t>(std::size(payload));
 
-    _sendBuffer.push_back(static_cast<char>(0x80 | static_cast<int>(opCode)));
+    _sendBuffer.push_back(static_cast<char>(0x80 | (compressed ? 0x40 : 0x00) |
+                                            static_cast<int>(opCode)));
 
     if (payloadSize <= 125) {
       _sendBuffer.push_back(
@@ -221,7 +224,9 @@ public:
   Expected serverSendFramedPayload(WSOpCode opCode, std::string_view payload) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    if (_deflateEnabled) {
+    const bool compressed = _deflateEnabled && (opCode == WSOpCode::Text ||
+                                                opCode == WSOpCode::Binary);
+    if (compressed) {
       if (auto deflatedResult =
               compressPayload(payload, http::SupportedCompression::WSDeflate,
                               this->getCompressedDataBuffer());
@@ -237,7 +242,8 @@ public:
 
     auto payloadSize = static_cast<uint16_t>(std::size(payload));
 
-    _sendBuffer.push_back(static_cast<char>(0x80 | static_cast<int>(opCode)));
+    _sendBuffer.push_back(static_cast<char>(0x80 | (compressed ? 0x40 : 0x00) |
+                                            static_cast<int>(opCode)));
 
     // ✅ Server-side: NO MASK bit (remove 0x80)
     if (payloadSize <= 125) {
@@ -539,11 +545,24 @@ private:
         }
 
         _finalFrame = wsFramePayload[0] & WS_FIN;
+        const bool rsv1 =
+            (static_cast<std::uint8_t>(wsFramePayload[0]) & 0x40U) != 0;
         messagePayload =
             std::string_view{wsFramePayload + headerSize + maskingKeyLength,
                              currentFramePayloadSize};
         const auto opCode =
             static_cast<WSOpCode>(wsFramePayload[0] & WS_OPCODE);
+
+        if (rsv1 && !_deflateEnabled) {
+          return std::unexpected(
+              "WebSocket protocol violation: RSV1 set without negotiated "
+              "permessage-deflate");
+        }
+        if (opCode == WSOpCode::Text || opCode == WSOpCode::Binary) {
+          _compressedMessage = rsv1;
+        } else if (opCode != WSOpCode::Continuation) {
+          _compressedMessage = false;
+        }
 
         _firstOp = opCode;
       } else {
@@ -625,7 +644,7 @@ private:
           }
           _maskingKey.reset();
         }
-        if (_deflateEnabled) {
+        if (_compressedMessage) {
           if (auto deflatedResult = http::decompressPayloadToBuffer(
                   messagePayload, http::SupportedCompression::WSDeflate,
                   BaseSocketEndpointT::getDecompressedBodyBuffer());
@@ -696,6 +715,7 @@ private:
     _pendingWSFrameContent = 0;
     _finalFrame = 0;
     _readBufferOffset = 0;
+    _compressedMessage = false;
     BaseSocketEndpointT::resetHttpState();
   }
 
@@ -715,6 +735,7 @@ private:
   std::uint32_t _readBufferOffset{0};
   bool _deflateRequested{false};
   bool _deflateEnabled{false};
+  bool _compressedMessage{false};
 };
 
 } // namespace medici::sockets::live

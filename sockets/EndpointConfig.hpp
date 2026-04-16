@@ -73,9 +73,6 @@ struct HttpEndpointConfig : public IPEndpointConfig {
 
 public:
   HttpEndpointConfig() {};
-  HttpEndpointConfig(IPEndpointConfig &&ipEndpointConfig,
-                     const std::string uriPath)
-      : IPEndpointConfig{std::move(ipEndpointConfig)}, _uriPath{uriPath} {};
   HttpEndpointConfig(const std::string &name, const std::string &host,
                      std::uint16_t port, const std::string &uri)
       : IPEndpointConfig(name, host, port), _uriPath{uri} {}
@@ -84,7 +81,7 @@ public:
       : IPEndpointConfig{config}, _uriPath{config.uriPath()} {}
 
   HttpEndpointConfig(const IPEndpointConfigC auto &config,
-                     const std::string &uri = "")
+                     const std::string &uri)
       : IPEndpointConfig{config}, _uriPath{uri} {}
 
   auto uriPath() const { return _uriPath; }
@@ -97,10 +94,6 @@ class WSEndpointConfig : public HttpEndpointConfig {
 
 public:
   WSEndpointConfig() {};
-  WSEndpointConfig(HttpEndpointConfig &&httpEndpointConfig,
-                   bool perMessageDeflate = false)
-      : HttpEndpointConfig{std::move(httpEndpointConfig)},
-        _perMessageDeflate{perMessageDeflate} {};
   WSEndpointConfig(const std::string &name, const std::string &host,
                    std::uint16_t port, const std::string &uri,
                    bool perMessageDeflate = false)

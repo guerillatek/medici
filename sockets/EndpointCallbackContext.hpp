@@ -135,8 +135,7 @@ class CallbackBaseSelect<EndpointT, CoordinatorT>
     : public EndpointCallbackBaseMembers<EndpointT, CoordinatorT> {
 public:
   template <typename... ArgsT>
-  CallbackBaseSelect(CoordinatorT &endPointCoordinator,
-                     const IPEndpointConfig &config,
+  CallbackBaseSelect(CoordinatorT &endPointCoordinator, const auto &config,
                      IIPEndpointPollManager &endpointPollManager,
                      HttpServerPayloadHandlerC auto &incomingPayloadHandler,
                      SocketPayloadHandlerC auto &outgoingPayloadHandler,
