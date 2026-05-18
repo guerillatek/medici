@@ -81,7 +81,7 @@ class CallbackBaseSelect<EndpointT, CoordinatorT>
 public:
   template <typename... ArgsT>
   CallbackBaseSelect(CoordinatorT &endPointCoordinator,
-                     const IPEndpointConfig &config,
+                     const medici::sockets::HttpEndpointConfig &config,
                      IIPEndpointPollManager &endpointPollManager,
                      HttpClientPayloadHandlerC auto &incomingPayloadHandler,
                      SocketPayloadHandlerC auto &outgoingPayloadHandler,
@@ -90,38 +90,36 @@ public:
                      OnActiveHandlerT &onActiveHandler, ArgsT &&...args)
       : EndpointCallbackBaseMembers<EndpointT,
                                     CoordinatorT>{endPointCoordinator, config},
-        _endpoint{
-            std::forward<ArgsT>(args)...,
-            config,
-            endpointPollManager,
-            [this,
-             &incomingPayloadHandler](const http::HeaderFields &httpFields,
-                                      auto payload, int ec, auto tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return incomingPayloadHandler(httpFields, payload, ec, tp);
-            },
-            [this, &outgoingPayloadHandler](auto payload, auto tp) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return outgoingPayloadHandler(payload, tp);
-            },
-            [this, &closeHandler](const std::string &reason) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return closeHandler(reason);
-            },
-            [this, &disconnectedHandler](
-                const auto &reason, const IPEndpointConfig &endpointConfig) {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return disconnectedHandler(reason, endpointConfig);
-            },
-            [this, &onActiveHandler]() {
-              this->_endPointCoordinator.setActiveEndpoint(
-                  _endpoint.getEndpointUniqueId());
-              return onActiveHandler();
-            }} {}
+        _endpoint{std::forward<ArgsT>(args)...,
+                  config,
+                  endpointPollManager,
+                  [this, &incomingPayloadHandler](
+                      const http::HeaderFields &httpFields, auto payload,
+                      int ec, auto tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return incomingPayloadHandler(httpFields, payload, ec, tp);
+                  },
+                  [this, &outgoingPayloadHandler](auto payload, auto tp) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return outgoingPayloadHandler(payload, tp);
+                  },
+                  [this, &closeHandler](const std::string &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return closeHandler(reason);
+                  },
+                  [this, &disconnectedHandler](const auto &reason) {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return disconnectedHandler(reason);
+                  },
+                  [this, &onActiveHandler]() {
+                    this->_endPointCoordinator.setActiveEndpoint(
+                        _endpoint.getEndpointUniqueId());
+                    return onActiveHandler();
+                  }} {}
 
   auto &getEndpoint() const { return _endpoint; }
   auto &getEndpoint() { return _endpoint; }

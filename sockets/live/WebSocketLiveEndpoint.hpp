@@ -645,6 +645,8 @@ private:
           _maskingKey.reset();
         }
         if (_compressedMessage) {
+          auto& deflateBuffer = this->getCompressedDataBuffer();
+          deflateBuffer.clear();
           if (auto deflatedResult = http::decompressPayloadToBuffer(
                   messagePayload, http::SupportedCompression::WSDeflate,
                   BaseSocketEndpointT::getDecompressedBodyBuffer());

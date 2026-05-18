@@ -11,24 +11,26 @@
 
 namespace medici::timers {
 
-template <event_queue::EventQueueC EventQueueT> class TimerFactory {
+template <event_queue::EventQueueC EventQueueT>
+class TimerFactory : public ITimerFactory {
 public:
   TimerFactory(EventQueueT &eventQueue) : _eventQueue{eventQueue} {}
 
-  ITimerPtr createManualTimer(TimerType timerType, auto duration,
-                              event_queue::CallableC auto &&action) {
-    using TimerActionT = std::decay_t<decltype(action)>;
-    return make_unique<ManualTimer<EventQueueT, TimerActionT>>(
-        timerType, std::forward<TimerActionT>(action), _eventQueue, duration);
+  ITimerPtr createManualTimer(TimerType timerType,
+                              std::chrono::nanoseconds duration,
+                              event_queue::CallableT action) {
+
+    return make_unique<ManualTimer<EventQueueT, event_queue::CallableT>>(
+        timerType, std::move(action), _eventQueue, duration);
   }
 
   IEndPointTimerPtr createEndpointTimer(TimerType timerType,
                                         sockets::IIPEndpoint &endpoint,
-                                        auto duration,
-                                        event_queue::CallableC auto &&action) {
-    using TimerActionT = std::decay_t<decltype(action)>;
-    auto newTimer = make_shared<EndpointTimer<EventQueueT, TimerActionT>>(
-        timerType, std::forward<TimerActionT>(action), _eventQueue, duration);
+                                        std::chrono::nanoseconds duration,
+                                        event_queue::CallableT action) {
+    auto newTimer =
+        make_shared<EndpointTimer<EventQueueT, event_queue::CallableT>>(
+            timerType, std::move(action), _eventQueue, duration);
     if (endpoint.isActive()) {
       newTimer->start();
     }

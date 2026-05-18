@@ -176,6 +176,7 @@ Expected decompressPayloadToPartialPayloadHandler(
 Expected decompressPayloadToBuffer(std::string_view compressedPayload,
                                    SupportedCompression compressionType,
                                    auto &targetBuffer) {
+  targetBuffer.clear();
   return decompressPayloadToPartialPayloadHandler(
       compressedPayload, compressionType,
       [&targetBuffer](std::string_view chunk) {

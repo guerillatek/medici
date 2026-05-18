@@ -1,8 +1,11 @@
 #pragma once
 
-#include "medici/IEndpointEventDispatch.hpp"
 #include "medici/event_queue/concepts.hpp"
 #include "medici/sockets/EndpointConfig.hpp"
+
+namespace medici::sockets {
+class IIPEndpoint;
+} // namespace medici::sockets
 
 #include <memory>
 
@@ -27,7 +30,18 @@ public:
   virtual void pause() = 0;
   virtual void resume() = 0;
 };
-
 using IEndPointTimerPtr = std::shared_ptr<IEndPointTimer>;
+
+class ITimerFactory {
+public:
+  virtual ~ITimerFactory() = default;
+  virtual ITimerPtr createManualTimer(TimerType timerType,
+                                      std::chrono::nanoseconds duration,
+                                      event_queue::CallableT action) = 0;
+  virtual IEndPointTimerPtr
+  createEndpointTimer(TimerType timerType, sockets::IIPEndpoint &endpoint,
+                      std::chrono::nanoseconds duration,
+                      event_queue::CallableT action) = 0;
+};
 
 } // namespace medici::timers

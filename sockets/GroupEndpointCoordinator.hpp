@@ -100,6 +100,8 @@ public:
     return {};
   }
 
+  bool hasActiveEndpoint() const { return _activeContextEntry.has_value(); }
+
   auto &getActiveContext() {
     if (!_activeContextEntry) {
       throw std::runtime_error("No active endpoint set");
@@ -107,6 +109,20 @@ public:
     auto &activeContextEntry = _activeContextEntry.value();
     auto &activeContext = *(activeContextEntry->second.get());
     return activeContext;
+  }
+
+  Expected removeActiveContext() {
+    if (!_activeContextEntry) {
+      return std::unexpected("No active endpoint to remove");
+    }
+    auto activeContextEntry = _activeContextEntry.value();
+    if (activeContextEntry->second->getEndpoint().isActive()) {
+      return std::unexpected(
+          "Cannot remove active endpoint while it is active");
+    }
+    _contextLookup.erase(activeContextEntry->first);
+    _activeContextEntry.reset();
+    return {};
   }
 
   auto &getContext(std::uint64_t endpointId) {
