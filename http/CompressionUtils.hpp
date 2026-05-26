@@ -32,8 +32,8 @@ inline int getWindowBits(SupportedCompression compressionType) {
 
 // Compression utility functions
 
-Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
-                         int windowBits);
+Expected compressZStream(z_stream &strm, std::string_view input,
+                         std::vector<uint8_t> &output);
 
 Expected compressBrotli(std::string_view input, std::vector<uint8_t> &output,
                         int quality = 6);
@@ -46,9 +46,9 @@ Expected compressFileStreamingBrotli(const std::filesystem::path &filePath,
                                      std::vector<uint8_t> &output,
                                      int quality = 6);
 
-Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
-                                      std::vector<uint8_t> &output,
-                                      int windowBits = 15);
+Expected compressFileStreamingZ(const std::filesystem::path &filePath,
+                                std::vector<uint8_t> &output,
+                                SupportedCompression compressionType);
 
 Expected compressFile(const std::filesystem::path &filePath,
                       SupportedCompression compressionType,
@@ -61,20 +61,9 @@ concept RawPayloadHandlerC = requires(T t) {
 };
 
 Expected
-decompressZlibBasedStreaming(std::string_view compressedPayload,
+decompressZlibBasedStreaming(z_stream &strm, std::string_view compressedPayload,
                              SupportedCompression compressionType,
                              RawPayloadHandlerC auto &&partialPayloadHandler) {
-
-  z_stream strm = {};
-
-  auto windowBits = getWindowBits(compressionType);
-  if (windowBits == 0) {
-    return std::unexpected("Unsupported compression type");
-  }
-
-  if (inflateInit2(&strm, windowBits) != Z_OK) {
-    return std::unexpected("Failed to initialize decompression");
-  }
 
   std::vector<uint8_t> buffer(8192); // 8KB chunks
 
@@ -91,7 +80,8 @@ decompressZlibBasedStreaming(std::string_view compressedPayload,
 
     if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
       inflateEnd(&strm);
-      return std::unexpected("Decompression failed");
+      return std::unexpected(std::format(
+          "Decompression failed: {}", strm.msg ? strm.msg : "Unknown error"));
     }
 
     size_t decompressed = buffer.size() - strm.avail_out;
@@ -106,8 +96,6 @@ decompressZlibBasedStreaming(std::string_view compressedPayload,
     }
 
   } while (ret != Z_STREAM_END && strm.avail_out == 0);
-
-  inflateEnd(&strm);
   return Expected{}; // Indicate success
 }
 
@@ -159,30 +147,74 @@ Expected decompressBrotliStreaming(std::string_view compressed,
 
 Expected decompressPayloadToPartialPayloadHandler(
     std::string_view compressedPayload, SupportedCompression compressionType,
-    RawPayloadHandlerC auto &&partialPayloadHandler) {
+    RawPayloadHandlerC auto &&partialPayloadHandler, z_stream *strm = nullptr) {
   switch (compressionType) {
   case SupportedCompression::GZip:
   case SupportedCompression::HttpDeflate:
   case SupportedCompression::WSDeflate:
-    return decompressZlibBasedStreaming(compressedPayload, compressionType,
-                                        partialPayloadHandler);
+    if (strm == nullptr) {
+      return std::unexpected(
+          "z_stream must be provided for zlib-based decompression");
+    }
+    return decompressZlibBasedStreaming(*strm, compressedPayload,
+                                        compressionType, partialPayloadHandler);
   case SupportedCompression::Brotli:
     return decompressBrotliStreaming(compressedPayload, partialPayloadHandler);
-  default:
-    return std::unexpected("Unsupported compression type");
   }
+  return std::unexpected("Unsupported compression type");
 }
 
 Expected decompressPayloadToBuffer(std::string_view compressedPayload,
                                    SupportedCompression compressionType,
-                                   auto &targetBuffer) {
+                                   auto &targetBuffer, z_stream &strm) {
   targetBuffer.clear();
   return decompressPayloadToPartialPayloadHandler(
       compressedPayload, compressionType,
       [&targetBuffer](std::string_view chunk) {
         std::copy(chunk.begin(), chunk.end(), std::back_inserter(targetBuffer));
         return Expected{};
-      });
+      },
+      &strm);
+}
+
+Expected openZStreamDecompression(z_stream &strm,
+                                  SupportedCompression compressionType);
+Expected openZStreamCompression(z_stream &strm,
+                                SupportedCompression compressionType);
+
+Expected closeZStream(z_stream &strm);
+
+Expected decompressPayloadToBuffer(std::string_view compressedPayload,
+                                   SupportedCompression compressionType,
+                                   auto &targetBuffer) {
+
+  if (compressionType == SupportedCompression::Brotli) {
+    return decompressPayloadToPartialPayloadHandler(
+        compressedPayload, compressionType,
+        [&targetBuffer](std::string_view chunk) {
+          std::copy(chunk.begin(), chunk.end(),
+                    std::back_inserter(targetBuffer));
+          return Expected{};
+        });
+  }
+
+  z_stream strm = {};
+  auto initResult = openZStreamDecompression(strm, compressionType);
+  if (!initResult) {
+    return std::unexpected("Failed to initialize decompression stream: " +
+                           initResult.error());
+  }
+
+  targetBuffer.clear();
+  auto result = decompressPayloadToPartialPayloadHandler(
+      compressedPayload, compressionType,
+      [&targetBuffer](std::string_view chunk) {
+        std::copy(chunk.begin(), chunk.end(), std::back_inserter(targetBuffer));
+        return Expected{};
+      },
+      &strm);
+  inflateEnd(&strm);
+  return result;
 }
 
 } // namespace medici::http

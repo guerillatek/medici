@@ -5,35 +5,9 @@
 
 namespace medici::http {
 
-Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
-                         int windowBits) {
+Expected compressZStream(z_stream &strm, std::string_view input,
+                         std::vector<uint8_t> &output) {
   // Validate windowBits parameter for RFC 7692
-
-  z_stream strm = {};
-  // RFC 7692 requires raw DEFLATE format (negative windowBits)
-  // window_bits_ can be negotiated between 8-15
-  int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
-                         windowBits, // NEGATIVE for raw DEFLATE
-                         8,           // Standard memory level
-                         Z_DEFAULT_STRATEGY);
-
-  if (ret != Z_OK) {
-    std::string error_msg;
-    switch (ret) {
-      case Z_MEM_ERROR:
-        error_msg = "Insufficient memory for DEFLATE initialization";
-        break;
-      case Z_STREAM_ERROR:
-        error_msg = std::format("Invalid DEFLATE parameters: windowBits={}", windowBits);
-        break;
-      case Z_VERSION_ERROR:
-        error_msg = "Zlib version mismatch";
-        break;
-      default:
-        error_msg = std::format("DEFLATE initialization failed with code: {}", ret);
-    }
-    return std::unexpected(error_msg);
-  }
 
   output.resize(input.size() + 32);
 
@@ -43,7 +17,7 @@ Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
   strm.next_out = output.data();
 
   // RFC 7692: Use Z_SYNC_FLUSH for per-message compression
-  ret = deflate(&strm, Z_SYNC_FLUSH);
+  auto ret = deflate(&strm, Z_SYNC_FLUSH);
   if (ret < 0) {
     deflateEnd(&strm);
     return std::unexpected(
@@ -60,7 +34,6 @@ Expected compressRFC7692(std::string_view input, std::vector<uint8_t> &output,
   }
 
   output.resize(compressed_size);
-  deflateEnd(&strm);
   return {};
 }
 
@@ -106,15 +79,22 @@ Expected compressBrotli(std::string_view input, std::vector<uint8_t> &output,
   return Expected{};
 }
 
-
 Expected compressPayload(std::string_view input,
-                                SupportedCompression compressionType,
-                                std::vector<uint8_t> &output) {
+                         SupportedCompression compressionType,
+                         std::vector<uint8_t> &output) {
   switch (compressionType) {
   case SupportedCompression::GZip:
   case SupportedCompression::HttpDeflate:
-  case SupportedCompression::WSDeflate:
-    return compressRFC7692(input, output, getWindowBits(compressionType));
+  case SupportedCompression::WSDeflate: {
+    z_stream strm = {};
+    if (auto result = openZStreamCompression(strm, compressionType); !result) {
+      return result;
+    }
+    if (auto result = compressZStream(strm, input, output); !result) {
+      return result;
+    }
+    return Expected{};
+  }
   case SupportedCompression::Brotli:
     return compressBrotli(input, output);
   default:
@@ -122,12 +102,9 @@ Expected compressPayload(std::string_view input,
   }
 }
 
-
-
-
-Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
-                                      std::vector<uint8_t> &output,
-                                      int windowBits) {
+Expected compressFileStreamingZ(const std::filesystem::path &filePath,
+                                std::vector<uint8_t> &output,
+                                SupportedCompression compressionType) {
   if (!std::filesystem::exists(filePath) ||
       !std::filesystem::is_regular_file(filePath)) {
     return std::unexpected("File does not exist or is not a regular file");
@@ -139,24 +116,8 @@ Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
   }
 
   z_stream strm = {};
-  int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, windowBits,
-                         8, Z_DEFAULT_STRATEGY);
-  if (ret != Z_OK) {
-    std::string error_msg;
-    switch (ret) {
-      case Z_MEM_ERROR:
-        error_msg = "Insufficient memory for DEFLATE initialization";
-        break;
-      case Z_STREAM_ERROR:
-        error_msg = std::format("Invalid DEFLATE parameters: windowBits={}", windowBits);
-        break;
-      case Z_VERSION_ERROR:
-        error_msg = "Zlib version mismatch";
-        break;
-      default:
-        error_msg = std::format("DEFLATE initialization failed with code: {}", ret);
-    }
-    return std::unexpected(error_msg);
+  if (auto result = openZStreamCompression(strm, compressionType); !result) {
+    return result;
   }
 
   output.clear();
@@ -180,7 +141,7 @@ Expected compressFileStreamingRFC7692(const std::filesystem::path &filePath,
       strm.next_out = outputBuffer.data();
 
       int flush = file.eof() ? Z_SYNC_FLUSH : Z_NO_FLUSH;
-      ret = deflate(&strm, flush);
+      auto ret = deflate(&strm, flush);
 
       if (ret < 0) {
         deflateEnd(&strm);
@@ -276,15 +237,65 @@ Expected compressFile(const std::filesystem::path &filePath,
   switch (compressionType) {
   case SupportedCompression::GZip:
   case SupportedCompression::HttpDeflate:
-  case SupportedCompression::WSDeflate:
-    return compressFileStreamingRFC7692(filePath, output,
-                                        getWindowBits(compressionType));
+  case SupportedCompression::WSDeflate: {
+    return compressFileStreamingZ(filePath, output, compressionType);
+  }
   case SupportedCompression::Brotli:
     return compressFileStreamingBrotli(filePath, output);
   default:
     return std::unexpected("Unsupported compression type");
   };
+}
 
-} 
+Expected openZStreamDecompression(z_stream &strm,
+                                  SupportedCompression compressionType) {
+  int windowBits = getWindowBits(compressionType);
+  if (windowBits == 0) {
+    return std::unexpected("Unsupported compression type");
+  }
+  if (inflateInit2(&strm, windowBits) != Z_OK) {
+    return std::unexpected(
+        "Failed to initialize zlib stream for decompression");
+  }
+  return Expected{};
+}
 
-}// namespace medici::http
+Expected openZStreamCompression(z_stream &strm,
+                                SupportedCompression compressionType) {
+
+  int windowBits = getWindowBits(compressionType);
+  int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                         windowBits, // NEGATIVE for raw DEFLATE
+                         8,          // Standard memory level
+                         Z_DEFAULT_STRATEGY);
+
+  if (ret != Z_OK) {
+    std::string error_msg;
+    switch (ret) {
+    case Z_MEM_ERROR:
+      error_msg = "Insufficient memory for DEFLATE initialization";
+      break;
+    case Z_STREAM_ERROR:
+      error_msg =
+          std::format("Invalid DEFLATE parameters: windowBits={}", windowBits);
+      break;
+    case Z_VERSION_ERROR:
+      error_msg = "Zlib version mismatch";
+      break;
+    default:
+      error_msg =
+          std::format("DEFLATE initialization failed with code: {}", ret);
+    }
+    return std::unexpected(error_msg);
+  }
+  return Expected{};
+}
+
+Expected closeZStream(z_stream &strm) {
+  if (inflateEnd(&strm) != Z_OK) {
+    return std::unexpected("Failed to clean up zlib stream");
+  }
+  return Expected{};
+}
+
+} // namespace medici::http

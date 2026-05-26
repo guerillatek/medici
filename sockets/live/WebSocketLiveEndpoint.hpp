@@ -159,12 +159,12 @@ public:
   Expected clientSendFramedPayload(WSOpCode opCode, std::string_view payload) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = _deflateEnabled && (opCode == WSOpCode::Text ||
-                                                opCode == WSOpCode::Binary);
+    const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
+                                                    opCode == WSOpCode::Binary);
     if (compressed) {
-      if (auto deflatedResult =
-              compressPayload(payload, http::SupportedCompression::WSDeflate,
-                              this->getCompressedDataBuffer());
+      if (auto deflatedResult = http::compressPayload(
+              payload, http::SupportedCompression::WSDeflate,
+              this->getCompressedDataBuffer());
           !deflatedResult) {
         return std::unexpected(std::format(
             "Failed to deflate websocket payload, endpoint name={}, error={}",
@@ -224,12 +224,11 @@ public:
   Expected serverSendFramedPayload(WSOpCode opCode, std::string_view payload) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = _deflateEnabled && (opCode == WSOpCode::Text ||
-                                                opCode == WSOpCode::Binary);
+    const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
+                                                    opCode == WSOpCode::Binary);
     if (compressed) {
-      if (auto deflatedResult =
-              compressPayload(payload, http::SupportedCompression::WSDeflate,
-                              this->getCompressedDataBuffer());
+      if (auto deflatedResult = http::compressZStream(
+              *_compressionContext, payload, this->getCompressedDataBuffer());
           !deflatedResult) {
         return std::unexpected(std::format(
             "Failed to deflate websocket payload, endpoint name={}, error={}",
@@ -382,7 +381,9 @@ private:
           auto extValue = extField.value();
           if (extValue.find("permessage-deflate") != std::string::npos) {
             // Client requested permessage-deflate extension
-            _deflateEnabled = true;
+            if (auto result = initializeCompressionContext(); !result) {
+              return result;
+            }
             responseHeaders.addFieldValue(
                 "Sec-WebSocket-Extensions",
                 "permessage-deflate; server_no_context_takeover; "
@@ -424,7 +425,10 @@ private:
         auto extValue = extField.value();
         if (extValue.find("permessage-deflate") != std::string::npos) {
           // Server accepted permessage-deflate extension
-          _deflateEnabled = true;
+          if (auto result = initializeDecompressionCompressionContext();
+              !result) {
+            return result;
+          }
         }
       }
       // Dispatch the onActive handler now that the upgrade is complete
@@ -441,7 +445,8 @@ private:
     // frame once it's established assuming that remaining content in the buffer
     // is large enough.
     std::uint32_t nextMessageOffset{0};
-
+    std::uint32_t currentBufferOffset{0};
+    std::uint32_t messagesRead{0};
     while (true) {
       // wsFramePayload is a pointer to the start of the active websocket frame
       // in the buffer that we're about to process for this cycle . We establish
@@ -450,7 +455,8 @@ private:
       // current frame we're processing to prep it for the next cycle.
       auto wsFramePayload =
           BaseSocketEndpointT::getInboundBuffer().data() + nextMessageOffset;
-
+      currentBufferOffset = nextMessageOffset;
+      ++messagesRead;
       // wsFramePayloadSize below represents the size of the content starting
       // from the wsFramePayload ptr to the end of the current buffer. We use
       // this value to determine whether the current buffer contains all or part
@@ -547,24 +553,22 @@ private:
         _finalFrame = wsFramePayload[0] & WS_FIN;
         const bool rsv1 =
             (static_cast<std::uint8_t>(wsFramePayload[0]) & 0x40U) != 0;
+
         messagePayload =
             std::string_view{wsFramePayload + headerSize + maskingKeyLength,
                              currentFramePayloadSize};
+
         const auto opCode =
             static_cast<WSOpCode>(wsFramePayload[0] & WS_OPCODE);
 
-        if (rsv1 && !_deflateEnabled) {
-          return std::unexpected(
-              "WebSocket protocol violation: RSV1 set without negotiated "
-              "permessage-deflate");
-        }
         if (opCode == WSOpCode::Text || opCode == WSOpCode::Binary) {
           _compressedMessage = rsv1;
         } else if (opCode != WSOpCode::Continuation) {
           _compressedMessage = false;
         }
 
-        _firstOp = opCode;
+        if (!_firstOp)
+          _firstOp = opCode;
       } else {
         if (wsFramePayloadSize < _pendingWSFrameContent) {
           _pendingWSFrameContent -= wsFramePayloadSize;
@@ -616,7 +620,7 @@ private:
 
       // DISPATCH THE MESSAGE PAYLOAD
       Expected handleResult;
-      switch (_firstOp) {
+      switch (*_firstOp) {
       case WSOpCode::ClosedConnection:
         return onDisconnected("Connection was closed by the remote server");
       case WSOpCode::Continuation:
@@ -630,7 +634,7 @@ private:
         [[fallthrough]];
       case WSOpCode::Pong:
         handleResult =
-            _incomingPayloadHandler(messagePayload, _firstOp, *_frameReadTime);
+            _incomingPayloadHandler(messagePayload, *_firstOp, *_frameReadTime);
         break;
       case WSOpCode::Text:
       case WSOpCode::Binary: {
@@ -645,16 +649,38 @@ private:
           _maskingKey.reset();
         }
         if (_compressedMessage) {
-          auto& deflateBuffer = this->getCompressedDataBuffer();
+          _preDecompressionBuffer.clear();
+          std::copy(messagePayload.begin(), messagePayload.end(),
+                    std::back_inserter(_preDecompressionBuffer));
+          // Append the 0x00, 0x00, 0xff, 0xff tail to indicate end of
+          // compressed block as per RFC 7692 for permessage-deflate compressed
+          // messages with no context takeover
+          const std::array<char, 4> deflateBlockTail{
+              0x00, 0x00, static_cast<char>(0xff), static_cast<char>(0xff)};
+          std::copy(deflateBlockTail.begin(), deflateBlockTail.end(),
+                    std::back_inserter(_preDecompressionBuffer));
+
+          messagePayload = std::string_view{_preDecompressionBuffer.data(),
+                                            _preDecompressionBuffer.size()};
+
+          auto &deflateBuffer = this->getCompressedDataBuffer();
           deflateBuffer.clear();
           if (auto deflatedResult = http::decompressPayloadToBuffer(
                   messagePayload, http::SupportedCompression::WSDeflate,
-                  BaseSocketEndpointT::getDecompressedBodyBuffer());
+                  BaseSocketEndpointT::getDecompressedBodyBuffer(),
+                  *_compressionContext);
               !deflatedResult) {
-            return std::unexpected(
-                std::format("Failed to inflate websocket payload, endpoint "
-                            "name={}, error={}",
-                            this->name(), deflatedResult.error()));
+            return std::unexpected(std::format(
+                "Failed to inflate websocket payload, endpoint_name='{}', "
+                "networkBytesRead={}, "
+                "wsFramePayloadSize={},"
+                "currentBufferOffset={},"
+                "messagesRead={}, "
+                "currentFramePayloadSize={},"
+                "error={}",
+                this->name(), networkBytesRead, wsFramePayloadSize,
+                currentBufferOffset, messagesRead, currentFramePayloadSize,
+                deflatedResult.error()));
           } else {
             messagePayload = std::string_view(
                 reinterpret_cast<const char *>(
@@ -663,16 +689,19 @@ private:
           }
         }
         handleResult =
-            _incomingPayloadHandler(messagePayload, _firstOp, *_frameReadTime);
+            _incomingPayloadHandler(messagePayload, *_firstOp, *_frameReadTime);
         break;
       }
       default:
+        _firstOp.reset();
+        _continuationBuffer.clear();
         return onDisconnected(
             "Decoding error ... Received unknown Websocket frame type");
         break;
       };
-
+      _firstOp.reset();
       _continuationBuffer.clear();
+      _compressedMessage = false;
       if (!handleResult) {
         return handleResult;
       }
@@ -718,11 +747,50 @@ private:
     _finalFrame = 0;
     _readBufferOffset = 0;
     _compressedMessage = false;
+    closeCompressionContext();
     BaseSocketEndpointT::resetHttpState();
   }
 
-  std::vector<char> _sendBuffer;
+  Expected initializeDecompressionCompressionContext() {
+    _compressionContext = z_stream{};
+    if (auto result = http::openZStreamDecompression(
+            *_compressionContext, http::SupportedCompression::WSDeflate);
+        !result) {
+      return std::unexpected(
+          std::format("Failed to initialize z_stream context for websocket "
+                      "endpoint, error={}",
+                      result.error()));
+    }
+    return {};
+  }
 
+  Expected initializeCompressionContext() {
+    _compressionContext = z_stream{};
+    if (auto result = http::openZStreamCompression(
+            *_compressionContext, http::SupportedCompression::WSDeflate);
+        !result) {
+      return std::unexpected(
+          std::format("Failed to initialize z_stream context for websocket "
+                      "endpoint, error={}",
+                      result.error()));
+    }
+    return {};
+  }
+
+  Expected closeCompressionContext() {
+    if (_compressionContext) {
+      if (auto result = http::closeZStream(*_compressionContext); !result) {
+        return std::unexpected(
+            std::format("Failed to close z_stream context for websocket "
+                        "endpoint, error={}",
+                        result.error()));
+      }
+      _compressionContext.reset();
+    }
+    return {};
+  }
+
+  std::vector<char> _sendBuffer;
   // proprietary websocket handlers
   WebSocketPayloadHandlerT _incomingPayloadHandler;
   WebSocketPayloadHandlerT _outgoingHandler;
@@ -731,12 +799,14 @@ private:
   std::optional<std::array<char, 4>> _maskingKey;
   // Websocket buffer assembly/continuation
   std::vector<char> _continuationBuffer{};
-  WSOpCode _firstOp;
+  std::vector<char> _preDecompressionBuffer{};
+
+  std::optional<WSOpCode> _firstOp;
   std::uint32_t _pendingWSFrameContent{0};
   bool _finalFrame{false};
   std::uint32_t _readBufferOffset{0};
   bool _deflateRequested{false};
-  bool _deflateEnabled{false};
+  std::optional<z_stream> _compressionContext{};
   bool _compressedMessage{false};
 };
 
