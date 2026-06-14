@@ -20,7 +20,7 @@ uint32_t generateMaskingKey();
 void maskFrame(char *json, std::size_t sz);
 
 std::string base64Encode(std::string_view input);
-std::string base64Decode(std::string_view &input);
+std::string base64Decode(std::string_view input);
 std::string getHEX64Signature(const std::string &secretKey,
                               const std::string &payload);
 std::string getES256SignatureBase64(std::string_view privateKeyPem,
