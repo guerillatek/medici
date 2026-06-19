@@ -1,4 +1,4 @@
-add_library(cryptpoUtils SHARED 
+add_library(cryptpoUtils 
     CryptoUtils.cpp CryptoUtils.hpp
     OpenSSLUtils.cpp CryptoUtils.hpp
 )
