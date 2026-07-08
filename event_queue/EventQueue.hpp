@@ -145,12 +145,15 @@ public:
   ExpectedBuffer getNextActionPayload() {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
       if (_preparedEntry) {
-        return std::unexpected(
-            "Action payload already engaged for next queue entry");
+        return std::unexpected(std::format(
+            "Action payload already engaged for next queue[{}] entry",
+            _queueName));
       }
       if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected("Local Async event queue has reached capacity "
-                               "Next action payload cannot be allocated");
+        return std::unexpected(
+            std::format("Local Async event queue[{}] has reached capacity "
+                        "Next action payload cannot be allocated",
+                        _queueName));
       }
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -170,12 +173,15 @@ public:
                    "payload");
       }
       if (_preparedEntry) {
-        return std::unexpected(
-            "Next Action object already engaged for next queue entry");
+        return std::unexpected(std::format(
+            "Next Action object already engaged for next queue[{}] entry",
+            _queueName));
       }
       if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected("Local Async event queue has reached capacity "
-                               "Next action object cannot be allocated");
+        return std::unexpected(
+            std::format("Local Async event queue[{}] has reached capacity "
+                        "Next action object cannot be allocated",
+                        _queueName));
       }
 
       auto bufferResult = getNextActionPayload();
@@ -194,14 +200,21 @@ public:
       return std::unexpected(findResult.error());
     }
     auto &targetQueueEntry = findResult.value();
-    return targetQueueEntry->producerQueue.template getNextActionObject<T>(
-        std::forward<ConstructorArgs>(args)...);
+    auto result =
+        targetQueueEntry->producerQueue.template getNextActionObject<T>(
+            std::forward<ConstructorArgs>(args)...);
+    if (!result) {
+      return std::unexpected(std::format("Error on event queue[{}]. {}",
+                                         _queueName, result.error()));
+    }
+    return result;
   }
 
   template <CallableC T> Expected postAction(T &&action) {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
       if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected("Local Async event queue has reached capacity");
+        return std::unexpected(std::format(
+            "Local Async event queue[{}] has reached capacity", _queueName));
       }
 
       if (_preparedEntry) {
@@ -227,7 +240,9 @@ public:
 
     if (_preparedEntry) {
       return std::unexpected(
-          "Thread local payloads are not supported for async actions!!");
+          std::format("Error on event queue[{}]. Thread local payloads are not "
+                      "supported for async actions!!",
+                      _queueName));
     }
     auto asyncCallableWrapper = [action = std::move(action),
                                  this]() mutable -> Expected {
@@ -246,7 +261,10 @@ public:
 
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
       if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected("Local Async event queue has reached capacity");
+        return std::unexpected(
+            std::format("Error on event queue[{}]. Local Async event queue has "
+                        "reached capacity",
+                        _queueName));
       }
       _localEventQueue.emplace_back(std::move(asyncCallableWrapper));
       return {};
@@ -260,12 +278,15 @@ public:
     if (_preparedEntry) {
       _preparedEntry.reset();
       return std::unexpected(
-          "Thread local payloads are not supported for timed events!!");
+          std::format("Error on queue[{}], Thread local payloads are not "
+                      "supported for timed events!!",
+                      _queueName));
     }
     if (_clock() > timePoint) {
       return std::unexpected(std::format(
-          "Posting timed action for expired time={}, currentTime={}", timePoint,
-          _clock()));
+          "Error on event queue[{}]. Posting timed action for expired "
+          "time={}, currentTime={}",
+          _queueName, timePoint, _clock()));
     }
 
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
@@ -285,9 +306,10 @@ public:
   template <CallableC T>
   Expected postIdleTimedAction(TimePoint timePoint, T &&action) {
     if (_clock() > timePoint) {
-      return std::unexpected(std::format(
-          "Cannot post timed action for expired time={}, currentTime={}",
-          timePoint, _clock()));
+      return std::unexpected(
+          std::format("Error on event queue[{}]. Cannot post timed action for "
+                      "expired time={}, currentTime={}",
+                      _queueName, timePoint, _clock()));
     }
 
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
@@ -302,7 +324,8 @@ public:
 
   Expected start() {
     if (_activeThreadId) {
-      return std::unexpected("Event queue already active cannot be started");
+      return std::unexpected(std::format(
+          "Event queue[{}] already active cannot be started", _queueName));
     }
     _activeThreadId = std::this_thread::get_id();
     _isActive = true;
@@ -310,8 +333,8 @@ public:
     while (_activeThreadId && result) {
       result = runEventCycle();
       if (!result) {
-        std::cerr << "Event queue encountered error: " << result.error()
-                  << std::endl;
+        std::cerr << "Event queue[" << _queueName
+                  << "] encountered error: " << result.error() << std::endl;
         return result;
       }
     }
@@ -319,7 +342,8 @@ public:
   }
   Expected stop() {
     if (!_activeThreadId) {
-      return std::unexpected("Invalid stop request. Event queue is not active");
+      return std::unexpected(std::format(
+          "Invalid stop request. Event queue[{}] is not active", _queueName));
     }
     _activeThreadId.reset();
     _isActive = false;
@@ -328,7 +352,8 @@ public:
 
   Expected pumpEvents() {
     if (_activeThreadId) {
-      return std::unexpected("Cannot pump events on an active event queue");
+      return std::unexpected(std::format(
+          "Cannot pump events on an active event queue[{}]", _queueName));
     }
     return runEventCycle();
   }
@@ -369,7 +394,9 @@ private:
     // Check for async operations on local queue
     if (!_localEventQueue.empty()) {
       if (!_localEventQueue.front().action) {
-        return std::unexpected("Empty action placed on local async queue");
+        return std::unexpected(std::format("Error on event queue[{}]. Empty "
+                                           "action placed on local async queue",
+                                           _queueName));
       }
       auto result = _localEventQueue.front().action();
       if (_localEventQueue.front().payloadDeleteFunction) {
@@ -442,8 +469,8 @@ private:
 
     if (_externalProducerQueue.size() == _activeProducers) {
       return std::unexpected(
-          std::format("No producers can be registered for this event queue",
-                      _maxProducerThreads));
+          std::format("No producers can be registered for this event queue[{}]",
+                      _queueName, _maxProducerThreads));
     }
 
     auto targetIndex = _activeProducers.fetch_add(1, std::memory_order_relaxed);

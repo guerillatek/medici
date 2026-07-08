@@ -142,14 +142,18 @@ public:
   }
 
   Expected startAllThreads() {
+    try {
     for (auto &entry : _contextLookup) {
       auto threadName = entry.first;
       auto &context = entry.second.context;
-      _threadsByName.emplace(threadName, std::jthread{[&context, threadName]() {
-                               if (auto result = context->start(); !result) {
-                                 return;
-                               }
-                             }});
+      _threadsByName.emplace(
+          threadName, std::jthread{[&context, threadName]() {
+            if (auto result = context->start(); !result) {
+              throw std::runtime_error(std::string{
+                  std::format("Run context '{}' ended execution: {}",
+                              threadName, result.error())});
+            }
+          }});
       if (entry.second.cpu) {
         if (auto result = set_thread_cpu_affinity(
                 _threadsByName[threadName].native_handle(), *entry.second.cpu);
@@ -176,6 +180,10 @@ public:
       }
     }
     return {};
+    } catch (const std::exception &e) {
+      return std::unexpected(std::string{
+          std::format("Exception in context thread: {}", e.what())});
+    }
   }
 
   void stopAllThreads() {
