@@ -78,6 +78,7 @@ IPEndpointPollManager::initSSLServerContext(const std::string &certFile,
                     strerror(errno)));
   }
 
+  SSL_CTX_set_verify(context,SSL_VERIFY_NONE, nullptr);
   return context;
 }
 

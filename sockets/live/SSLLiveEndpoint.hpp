@@ -2,6 +2,7 @@
 
 #include "medici/sockets/live/EndpointBase.hpp"
 
+#include <deque>
 #include <functional>
 #include <memory>
 #include <openssl/err.h>
@@ -20,6 +21,12 @@ template <SocketPayloadHandlerC IncomingPayloadHandlerT>
 class SSLLiveEndpoint : public ITcpIpEndpoint,
                         protected EndpointBase<IncomingPayloadHandlerT> {
   using EndpointBaseT = EndpointBase<IncomingPayloadHandlerT>;
+  static constexpr size_t kMaxBackpressureBytes = 10 * 1024 * 1024;
+
+  struct PendingAsyncSend {
+    std::string payload;
+    CallableT finishCB;
+  };
 
 public:
   ~SSLLiveEndpoint() {
@@ -103,6 +110,9 @@ public:
   const std::string &name() const { return this->getConfig().name(); }
 
   event_queue::AsyncExpected HandleSSLHandshake() {
+    if (!_sslSocket) {
+      return true;
+    }
     if (int ret = SSL_do_handshake(_sslSocket.get()); ret != 1) [[unlikely]] {
       int sslError = SSL_get_error(_sslSocket.get(), ret);
       if (sslError == SSL_ERROR_WANT_READ || sslError == SSL_ERROR_WANT_WRITE) {
@@ -132,7 +142,10 @@ public:
                       activeTask, this->getConfig().name(),
                       (!failReason.empty() ? failReason : "unknown"));
       _sslSocket.reset();
-      return std::unexpected(failStatement);
+      if (auto result = onDisconnected(failStatement); !result) {
+        return std::unexpected(result.error());
+      }
+      return true;
     }
     _sslState = SSLState::Connected;
     this->getConnectionManager().registerWithEpoll();
@@ -206,35 +219,49 @@ public:
                       payload, this->getConfig().name(),
                       this->getConfig().host(), this->getConfig().port()));
     }
+    if (_asyncSendInProgress || !_pendingAsyncSends.empty()) {
+      return std::unexpected(
+          std::format("Endpoint name={} already has an async send in progress",
+                      this->getConfig().name()));
+    }
+
     if (auto result = this->getEventHandlers().onPayloadSend(
             payload, this->getConnectionManager().getClock()());
         !result) {
       return result;
     }
     std::size_t offset = 0;
-    while (true) {
-      auto bytesWritten = SSL_write(_sslSocket.get(), payload.data() + offset,
-                                    std::size(payload) - offset);
-      if (bytesWritten == 0) [[unlikely]] {
-        return onDisconnected("No bytes written on ssl read ... server likely "
-                              "dropped connection");
-      }
-      offset += bytesWritten;
-      if (offset < std::size(payload))
+    while (offset < std::size(payload)) {
+      const int bytesWritten =
+          SSL_write(_sslSocket.get(), payload.data() + offset,
+                    static_cast<int>(std::size(payload) - offset));
+      if (bytesWritten > 0) {
+        offset += static_cast<std::size_t>(bytesWritten);
         continue;
-      return {};
+      }
+
+      const int sslError = SSL_get_error(_sslSocket.get(), bytesWritten);
+      if (sslError == SSL_ERROR_WANT_READ || sslError == SSL_ERROR_WANT_WRITE) {
+        // Non-blocking socket backpressure: keep retrying until write can
+        // progress.
+        continue;
+      }
+
+      char msg[1024];
+      ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+      return onDisconnected(std::format(
+          "SSL_write failed on endpoint, name={}, host={}, port={}, msg={}",
+          this->getConfig().name(), this->getConfig().host(),
+          this->getConfig().port(), msg));
     }
     return {};
   }
 
   Expected sendAsync(std::string_view buffer, CallableT &&finishCB) {
-    if (!this->getOutboundBuffer().empty()) {
-      return std::unexpected(
-          std::format("Endpoint name={} already has an async send in progress",
-                      this->getConfig().name()));
+    if (auto backpressureCheck = verifyBackpressureLimit(buffer.size());
+        !backpressureCheck) {
+      return closeEndpoint(backpressureCheck.error());
     }
-    std::copy(buffer.begin(), buffer.end(),
-              std::back_inserter(this->getOutboundBuffer()));
 
     if (auto result = this->getEventHandlers().onPayloadSend(
             buffer, this->getConnectionManager().getClock()());
@@ -242,23 +269,22 @@ public:
       return std::unexpected{result.error()};
     }
 
+    if (_asyncSendInProgress) {
+      _queuedBackpressureBytes += buffer.size();
+      _pendingAsyncSends.emplace_back(
+          PendingAsyncSend{std::string{buffer}, std::move(finishCB)});
+      return {};
+    }
+
+    this->clearOutboundBuffer();
+    std::copy(buffer.begin(), buffer.end(),
+              std::back_inserter(this->getOutboundBuffer()));
+    _activeFinishCB = std::move(finishCB);
+    _asyncBytesSent = 0;
+    _asyncSendInProgress = true;
+
     return this->getConnectionManager().getEventQueue().postAsyncAction(
-        [this, finishCB]() -> AsyncExpected {
-          auto sendResult = sendAsyncCont();
-          if (!sendResult) {
-            return std::unexpected(sendResult.error());
-          }
-          if (sendResult.value()) {
-            if (finishCB) {
-              auto result = finishCB();
-              if (!result) {
-                return std::unexpected(result.error());
-              }
-            }
-            return true;
-          }
-          return false;
-        });
+        [this]() -> AsyncExpected { return processAsyncSendQueue(); });
   }
 
   AsyncExpected sendAsyncCont() {
@@ -273,9 +299,17 @@ public:
         this->getOutboundBuffer().size() - _asyncBytesSent);
 
     if (bytesWritten <= 0) [[unlikely]] {
-      auto result =
-          onDisconnected("No bytes written on ssl read ... server likely "
-                         "dropped connection");
+      const int sslError = SSL_get_error(_sslSocket.get(), bytesWritten);
+      if (sslError == SSL_ERROR_WANT_READ || sslError == SSL_ERROR_WANT_WRITE) {
+        return false;
+      }
+
+      char msg[1024];
+      ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+      auto result = onDisconnected(std::format(
+          "SSL_write failed on endpoint, name={}, host={}, port={}, msg={}",
+          this->getConfig().name(), this->getConfig().host(),
+          this->getConfig().port(), msg));
       if (!result) {
         return std::unexpected(result.error());
       }
@@ -291,14 +325,87 @@ public:
     return false;
   }
 
+  AsyncExpected processAsyncSendQueue() {
+    if (!_asyncSendInProgress) {
+      return true;
+    }
+
+    auto sendResult = sendAsyncCont();
+    if (!sendResult) {
+      return std::unexpected(sendResult.error());
+    }
+    if (!sendResult.value()) {
+      return false;
+    }
+
+    if (_activeFinishCB) {
+      auto result = _activeFinishCB();
+      if (!result) {
+        return std::unexpected(result.error());
+      }
+      _activeFinishCB = {};
+    }
+    _asyncSendInProgress = false;
+
+    if (_pendingAsyncSends.empty()) {
+      return true;
+    }
+
+    auto nextSend = std::move(_pendingAsyncSends.front());
+    _pendingAsyncSends.pop_front();
+    _queuedBackpressureBytes -= nextSend.payload.size();
+
+    this->clearOutboundBuffer();
+    std::copy(nextSend.payload.begin(), nextSend.payload.end(),
+              std::back_inserter(this->getOutboundBuffer()));
+    _activeFinishCB = std::move(nextSend.finishCB);
+    _asyncBytesSent = 0;
+    _asyncSendInProgress = true;
+    return false;
+  }
+
+  Expected verifyBackpressureLimit(size_t incomingBytes) {
+    const auto activeBackpressureBytes =
+        _asyncSendInProgress
+            ? (this->getOutboundBuffer().size() >= _asyncBytesSent
+                   ? this->getOutboundBuffer().size() - _asyncBytesSent
+                   : 0)
+            : 0;
+    const auto totalBackpressureBytes =
+        _queuedBackpressureBytes + activeBackpressureBytes + incomingBytes;
+    if (totalBackpressureBytes <= kMaxBackpressureBytes) {
+      return {};
+    }
+
+    auto reason = std::format(
+        "Backpressure queue limit exceeded on endpoint name={} total={} "
+        "limit={}",
+        this->getConfig().name(), totalBackpressureBytes,
+        kMaxBackpressureBytes);
+    clearAsyncSendState();
+    if (auto disconnectResult = onDisconnected(reason); !disconnectResult) {
+      return std::unexpected(disconnectResult.error());
+    }
+    return std::unexpected(reason);
+  }
+
+  void clearAsyncSendState() {
+    this->clearOutboundBuffer();
+    _pendingAsyncSends.clear();
+    _activeFinishCB = {};
+    _queuedBackpressureBytes = 0;
+    _asyncBytesSent = 0;
+    _asyncSendInProgress = false;
+  }
+
   Expected onPayloadReady(TimePoint readTime) override {
 
-    int rc = 0;
+    int readRc = 0;
     while (true) {
       size_t bytesRead = 0;
-      auto rc = SSL_read_ex(_sslSocket.get(), this->getInboundBufferWritePos(),
-                            this->getInboundBufferAvailableSize(), &bytesRead);
-      if (rc == 1) [[likely]] {
+      readRc = SSL_read_ex(_sslSocket.get(), this->getInboundBufferWritePos(),
+                           this->getInboundBufferAvailableSize(), &bytesRead);
+      if (readRc == 1) [[likely]] {
         if (bytesRead == 0) {
           SSL_shutdown(_sslSocket.get());
           this->getConnectionManager().close();
@@ -338,7 +445,7 @@ public:
     }
 
     std::string errorMessage;
-    const auto ssl_rec = SSL_get_error(_sslSocket.get(), rc);
+    const auto ssl_rec = SSL_get_error(_sslSocket.get(), readRc);
     switch (ssl_rec) {
     case SSL_ERROR_WANT_READ: {
       return {};
@@ -377,6 +484,7 @@ public:
   }
 
   Expected onDisconnected(const std::string &reason) override {
+    clearAsyncSendState();
     auto result = resetConnection();
     if (!result) {
       if (!result) {
@@ -449,5 +557,9 @@ protected:
   SSL_SocketPtr _sslSocket;
   bool _clientHandshakePending{false};
   size_t _asyncBytesSent{0};
+  size_t _queuedBackpressureBytes{0};
+  bool _asyncSendInProgress{false};
+  CallableT _activeFinishCB{};
+  std::deque<PendingAsyncSend> _pendingAsyncSends{};
 };
 } // namespace medici::sockets::live

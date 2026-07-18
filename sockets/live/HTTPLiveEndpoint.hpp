@@ -440,6 +440,9 @@ protected:
       _state = HttpEndpointState::AwaitingResponse;
     }
     _sendQueue.pop_front();
+    if (!_sendQueue.empty()) {
+      return sendQueuedHttpData();
+    }
     return {};
   }
 
