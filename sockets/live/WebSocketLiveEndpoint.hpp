@@ -386,8 +386,7 @@ private:
             }
             responseHeaders.addFieldValue(
                 "Sec-WebSocket-Extensions",
-                "permessage-deflate; server_no_context_takeover; "
-                "client_no_context_takeover; client_max_window_bits");
+                "permessage-deflate; client_max_window_bits=15");
           }
         }
 

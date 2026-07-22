@@ -219,10 +219,8 @@ public:
                       payload, this->getConfig().name(),
                       this->getConfig().host(), this->getConfig().port()));
     }
-    if (_asyncSendInProgress || !_pendingAsyncSends.empty()) {
-      return std::unexpected(
-          std::format("Endpoint name={} already has an async send in progress",
-                      this->getConfig().name()));
+    if (_asyncSendInProgress) {
+      return sendAsync(payload, []() { return Expected{}; });
     }
 
     if (auto result = this->getEventHandlers().onPayloadSend(

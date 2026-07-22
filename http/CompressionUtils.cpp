@@ -17,6 +17,7 @@ Expected compressZStream(z_stream &strm, std::string_view input,
   strm.next_out = output.data();
 
   // RFC 7692: Use Z_SYNC_FLUSH for per-message compression
+  auto prev_total_out = strm.total_out;
   auto ret = deflate(&strm, Z_SYNC_FLUSH);
   if (ret < 0) {
     deflateEnd(&strm);
@@ -25,7 +26,8 @@ Expected compressZStream(z_stream &strm, std::string_view input,
   }
 
   // RFC 7692 step 3: Remove the 0x00 0x00 0xFF 0xFF trailer
-  size_t compressed_size = strm.total_out;
+  size_t compressed_size =
+      strm.total_out - prev_total_out; // Get the size of the compressed data
   if (compressed_size >= 4 && output[compressed_size - 4] == 0x00 &&
       output[compressed_size - 3] == 0x00 &&
       output[compressed_size - 2] == 0xFF &&

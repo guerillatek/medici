@@ -69,6 +69,11 @@ public:
     return _remoteEndpointCoordinator.closeRemoteEndpoints(reason);
   }
 
+  Expected forEachRemoteEndpoint(auto &&callback) {
+    return _remoteEndpointCoordinator.forEachEndpoint(
+        std::forward<decltype(callback)>(callback));
+  }
+
   auto &getEndpointCoordinator() { return _remoteEndpointCoordinator; }
 
   auto &getThreadRunContext() { return _threadRunContext; }
