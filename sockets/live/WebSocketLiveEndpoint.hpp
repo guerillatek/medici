@@ -118,16 +118,19 @@ public:
     return _upgraded && BaseSocketEndpointT::isActive();
   }
 
-  Expected sendText(std::string_view payload) override {
-    return sendFramedPayload(WSOpCode::Text, payload);
+  Expected sendText(std::string_view payload,
+                    CallableT cb = CallableT{}) override {
+    return sendFramedPayload(WSOpCode::Text, payload, std::move(cb));
   }
 
-  Expected sendBinary(std::string_view payload) override {
-    return sendFramedPayload(WSOpCode::Binary, payload);
+  Expected sendBinary(std::string_view payload,
+                      CallableT cb = CallableT{}) override {
+    return sendFramedPayload(WSOpCode::Binary, payload, std::move(cb));
   }
 
-  Expected sendPayload(WSOpCode opCode, std::string_view payload) override {
-    return sendFramedPayload(opCode, payload);
+  Expected sendPayload(WSOpCode opCode, std::string_view payload,
+                       CallableT cb = CallableT{}) override {
+    return sendFramedPayload(opCode, payload, std::move(cb));
   }
 
   auto generateMaskingKey() {
@@ -142,21 +145,23 @@ public:
     return key;
   }
 
-  Expected sendFramedPayload(WSOpCode opCode, std::string_view payload) {
+  Expected sendFramedPayload(WSOpCode opCode, std::string_view payload,
+                             CallableT cb = CallableT{}) {
     if (!_upgraded) {
       return std::unexpected("WebSocket endpoint not upgraded");
     }
 
     if constexpr (std::is_same_v<ServerSideEndpointT, BaseSocketEndpointT>) {
-      return serverSendFramedPayload(opCode, payload);
+      return serverSendFramedPayload(opCode, payload, std::move(cb));
     }
     if constexpr (std::is_same_v<ClientSideEndpointT, BaseSocketEndpointT>) {
-      return clientSendFramedPayload(opCode, payload);
+      return clientSendFramedPayload(opCode, payload, std::move(cb));
     }
     return std::unexpected("Unknown endpoint type");
   }
 
-  Expected clientSendFramedPayload(WSOpCode opCode, std::string_view payload) {
+  Expected clientSendFramedPayload(WSOpCode opCode, std::string_view payload,
+                                   CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
     const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
@@ -212,16 +217,30 @@ public:
 #ifdef FNXDEBUG
     // BIO_dump_fp(stdout, _sendBuffer.data(), _sendBuffer.size());
 #endif
-    if (auto result = BaseSocketEndpointT::send(
-            std::string_view(_sendBuffer.data(), _sendBuffer.size()));
-        !result) {
+    auto framedPayload =
+        std::string_view(_sendBuffer.data(), _sendBuffer.size());
+    if (cb) {
+      return BaseSocketEndpointT::sendAsync(
+          framedPayload,
+          [this, payload = std::string{uncompressed}, opCode,
+           cb = std::move(cb)]() mutable -> Expected {
+            _outgoingHandler(payload, opCode, this->getClock()());
+            if (cb) {
+              return cb();
+            }
+            return {};
+          });
+    }
+
+    if (auto result = BaseSocketEndpointT::send(framedPayload); !result) {
       return result;
     }
     _outgoingHandler(uncompressed, opCode, this->getClock()());
     return {};
   }
 
-  Expected serverSendFramedPayload(WSOpCode opCode, std::string_view payload) {
+  Expected serverSendFramedPayload(WSOpCode opCode, std::string_view payload,
+                                   CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
     const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
@@ -271,9 +290,22 @@ public:
 #ifdef FNXDEBUG
     // BIO_dump_fp(stdout, _sendBuffer.data(), _sendBuffer.size());
 #endif
-    if (auto result = BaseSocketEndpointT::send(
-            std::string_view(_sendBuffer.data(), _sendBuffer.size()));
-        !result) {
+    auto framedPayload =
+        std::string_view(_sendBuffer.data(), _sendBuffer.size());
+    if (cb) {
+      return BaseSocketEndpointT::sendAsync(
+          framedPayload,
+          [this, payload = std::string{uncompressed}, opCode,
+           cb = std::move(cb)]() mutable -> Expected {
+            _outgoingHandler(payload, opCode, this->getClock()());
+            if (cb) {
+              return cb();
+            }
+            return {};
+          });
+    }
+
+    if (auto result = BaseSocketEndpointT::send(framedPayload); !result) {
       return result;
     }
     _outgoingHandler(uncompressed, opCode, this->getClock()());

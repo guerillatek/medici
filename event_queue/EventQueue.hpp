@@ -101,9 +101,7 @@ public:
     }
     auto object = reinterpret_cast<T *>(bufferResult.value());
     std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-    _preparedEntry->payloadDeleteFunction = [object]() {
-      std::destroy_at(object);
-    };
+    _preparedEntry = PostEntry{{}, [object]() { std::destroy_at(object); }};
     return object;
   }
 
@@ -155,6 +153,10 @@ public:
                         "Next action payload cannot be allocated",
                         _queueName));
       }
+      auto dataPtr = _localPayloads[_nextActionPayload].data();
+      ++_nextActionPayload %= MaxProducerQueueSize;
+      _preparedEntry = PostEntry{{}, {}};
+      return dataPtr;
     }
     auto findResult = getThreadProducerQueueEntry();
     if (!findResult) {
@@ -190,9 +192,7 @@ public:
       }
       auto object = reinterpret_cast<T *>(bufferResult.value());
       std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-      _preparedEntry->payloadDeleteFunction = [object]() {
-        std::destroy_at(object);
-      };
+      _preparedEntry = PostEntry{{}, [object]() { std::destroy_at(object); }};
       return object;
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -225,6 +225,7 @@ public:
       }
 
       _localEventQueue.emplace_back(PostEntry{std::move(action), {}});
+
       return {};
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -511,7 +512,7 @@ private:
   std::atomic<bool> _isActive{false};
   std::atomic<size_t> _activeProducers{0};
   std::chrono::microseconds _inActivitySleepDuration;
-  size_t _nextActionPayload{};
+  size_t _nextActionPayload{0};
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
   std::optional<PostEntry> _preparedEntry{};

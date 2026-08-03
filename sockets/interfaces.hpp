@@ -113,9 +113,10 @@ using IHttpServerEndpointPtr = std::unique_ptr<IHttpServerEndpoint>;
 
 class IWebSocketEndpoint : public IIPEndpoint {
 public:
-  virtual Expected sendText(std::string_view) = 0;
-  virtual Expected sendBinary(std::string_view) = 0;
-  virtual Expected sendPayload(WSOpCode opCode, std::string_view) = 0;
+  virtual Expected sendText(std::string_view, CallableT cb = CallableT{}) = 0;
+  virtual Expected sendBinary(std::string_view, CallableT cb = CallableT{}) = 0;
+  virtual Expected sendPayload(WSOpCode opCode, std::string_view,
+                               CallableT cb = CallableT{}) = 0;
   // Manual disconnect that closes the session but also fires the disconnect
   // handlers
   virtual Expected disconnectEndpoint(const std::string &reason) = 0;
