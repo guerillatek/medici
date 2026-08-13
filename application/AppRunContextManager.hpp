@@ -56,8 +56,7 @@ public:
 
 using ContextThreadConfigList = std::vector<ContextThreadConfigPtr>;
 
-template <std::uint32_t ServiceRequestQueueSize = 256,
-          std::uint32_t PublisherQueueSize = 1024,
+template <std::uint32_t EventQueueMaxSize = 2048,
           std::uint32_t QueueEntryPayloadSize = 1024>
 class AppRunContextManager {
 
@@ -83,13 +82,13 @@ public:
       IPAppRunContext<medici::sockets::live::LiveSocketFactory,
                       medici::SystemClockNow,
                       medici::sockets::live::IPEndpointPollManager,
-                      QueueEntryPayloadSize, ServiceRequestQueueSize>;
+                      QueueEntryPayloadSize, EventQueueMaxSize>;
 
   using LiveIPShmEndpointContextT =
       IPAppRunContext<medici::sockets::live::LiveSocketFactory,
                       medici::SystemClockNow,
                       IPEndpointPollManagerWithShmSupport,
-                      QueueEntryPayloadSize, ServiceRequestQueueSize>;
+                      QueueEntryPayloadSize, EventQueueMaxSize>;
 
   AppRunContextManager() {
     _contextFactoryRegistry["LiveIPEndpointContext"] =
@@ -143,43 +142,44 @@ public:
 
   Expected startAllThreads() {
     try {
-    for (auto &entry : _contextLookup) {
-      auto threadName = entry.first;
-      auto &context = entry.second.context;
-      _threadsByName.emplace(
-          threadName, std::jthread{[&context, threadName]() {
-            if (auto result = context->start(); !result) {
-              throw std::runtime_error(std::string{
-                  std::format("Run context '{}' ended execution: {}",
-                              threadName, result.error())});
-            }
-          }});
-      if (entry.second.cpu) {
-        if (auto result = set_thread_cpu_affinity(
-                _threadsByName[threadName].native_handle(), *entry.second.cpu);
-            !result) {
-          return std::unexpected(std::string{
-              std::format("Failed to set CPU affinity for thread {}: {}",
-                          threadName, result.error())});
+      for (auto &entry : _contextLookup) {
+        auto threadName = entry.first;
+        auto context = entry.second.context;
+        _threadsByName.emplace(
+            threadName, std::jthread{[context, threadName]() {
+              if (auto result = context->start(); !result) {
+                std::cerr << std::format("Event Error on thread {}: {}",
+                                         threadName, result.error())
+                          << std::endl;
+              }
+            }});
+        if (entry.second.cpu) {
+          if (auto result = set_thread_cpu_affinity(
+                  _threadsByName[threadName].native_handle(),
+                  *entry.second.cpu);
+              !result) {
+            return std::unexpected(std::string{
+                std::format("Failed to set CPU affinity for thread {}: {}",
+                            threadName, result.error())});
+          }
+        }
+        if (entry.second.schedPolicy && entry.second.schedPriority) {
+          if (auto result = set_thread_sched_policy(
+                  _threadsByName[threadName].native_handle(),
+                  *entry.second.schedPolicy, *entry.second.schedPriority);
+              !result) {
+            return std::unexpected(std::string{
+                std::format("Failed to set scheduling policy for thread {}: {}",
+                            threadName, result.error())});
+          }
         }
       }
-      if (entry.second.schedPolicy && entry.second.schedPriority) {
-        if (auto result = set_thread_sched_policy(
-                _threadsByName[threadName].native_handle(),
-                *entry.second.schedPolicy, *entry.second.schedPriority);
-            !result) {
-          return std::unexpected(std::string{
-              std::format("Failed to set scheduling policy for thread {}: {}",
-                          threadName, result.error())});
+      for (auto &threadEntry : _threadsByName) {
+        if (threadEntry.second.joinable()) {
+          threadEntry.second.join();
         }
       }
-    }
-    for (auto &threadEntry : _threadsByName) {
-      if (threadEntry.second.joinable()) {
-        threadEntry.second.join();
-      }
-    }
-    return {};
+      return {};
     } catch (const std::exception &e) {
       return std::unexpected(std::string{
           std::format("Exception in context thread: {}", e.what())});

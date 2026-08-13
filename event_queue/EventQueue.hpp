@@ -101,7 +101,9 @@ public:
     }
     auto object = reinterpret_cast<T *>(bufferResult.value());
     std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-    _preparedEntry = PostEntry{{}, [object]() { std::destroy_at(object); }};
+    _preparedEntry = PostEntry{{}, [object]() {
+                                 std::destroy_at(object);
+                               }};
     return object;
   }
 
@@ -147,15 +149,15 @@ public:
             "Action payload already engaged for next queue[{}] entry",
             _queueName));
       }
-      if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected(
-            std::format("Local Async event queue[{}] has reached capacity "
-                        "Next action payload cannot be allocated",
-                        _queueName));
+      if (_activeAsyncStoreEntries == MaxProducerQueueSize) {
+        return std::unexpected(std::format(
+            "Local Async store on event queue[{}] has reached capacity "
+            "Next action payload cannot be allocated",
+            _queueName));
       }
       auto dataPtr = _localPayloads[_nextActionPayload].data();
       ++_nextActionPayload %= MaxProducerQueueSize;
-      _preparedEntry = PostEntry{{}, {}};
+      _preparedEntry = PostEntry{{}, [this]() { --_activeAsyncStoreEntries; }};
       return dataPtr;
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -179,20 +181,23 @@ public:
             "Next Action object already engaged for next queue[{}] entry",
             _queueName));
       }
-      if (_localEventQueue.size() == MaxProducerQueueSize) {
+      if (_activeAsyncStoreEntries == MaxProducerQueueSize) {
         return std::unexpected(
-            std::format("Local Async event queue[{}] has reached capacity "
+            std::format("Local reusable async store on event queue[{}] has "
+                        "reached capacity "
                         "Next action object cannot be allocated",
                         _queueName));
       }
-
       auto bufferResult = getNextActionPayload();
       if (!bufferResult) {
         return std::unexpected(bufferResult.error());
       }
       auto object = reinterpret_cast<T *>(bufferResult.value());
       std::construct_at(object, std::forward<ConstructorArgs>(args)...);
-      _preparedEntry = PostEntry{{}, [object]() { std::destroy_at(object); }};
+      _preparedEntry = PostEntry{{}, [object, this]() {
+                                   std::destroy_at(object);
+                                   --_activeAsyncStoreEntries;
+                                 }};
       return object;
     }
     auto findResult = getThreadProducerQueueEntry();
@@ -212,11 +217,6 @@ public:
 
   template <CallableC T> Expected postAction(T &&action) {
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
-      if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected(std::format(
-            "Local Async event queue[{}] has reached capacity", _queueName));
-      }
-
       if (_preparedEntry) {
         _preparedEntry->action = std::move(action);
         _localEventQueue.emplace_back(*_preparedEntry);
@@ -261,12 +261,6 @@ public:
     };
 
     if (!_activeThreadId || (std::this_thread::get_id() == *_activeThreadId)) {
-      if (_localEventQueue.size() == MaxProducerQueueSize) {
-        return std::unexpected(
-            std::format("Error on event queue[{}]. Local Async event queue has "
-                        "reached capacity",
-                        _queueName));
-      }
       _localEventQueue.emplace_back(std::move(asyncCallableWrapper));
       return {};
     }
@@ -334,8 +328,6 @@ public:
     while (_activeThreadId && result) {
       result = runEventCycle();
       if (!result) {
-        std::cerr << "Event queue[" << _queueName
-                  << "] encountered error: " << result.error() << std::endl;
         return result;
       }
     }
@@ -458,6 +450,21 @@ private:
   using ProducerQueueEntry = typename ExternalThreadProducerQueue::iterator;
 
   std::expected<ProducerQueueEntry, std::string> getThreadProducerQueueEntry() {
+    const auto currentThreadId = std::this_thread::get_id();
+    thread_local std::optional<size_t> cachedQueueIndex{};
+
+    if (cachedQueueIndex) {
+      const auto activeProducerCount =
+          _activeProducers.load(std::memory_order_acquire);
+      if (*cachedQueueIndex < activeProducerCount) {
+        auto &cachedEntry = _externalProducerQueue[*cachedQueueIndex];
+        if (cachedEntry.threadId == currentThreadId) {
+          return _externalProducerQueue.begin() + *cachedQueueIndex;
+        }
+      }
+      cachedQueueIndex.reset();
+    }
+
     auto isTargetThread = [](const ThreadQueuePair &x) {
       return x.threadId == std::this_thread::get_id();
     };
@@ -465,6 +472,7 @@ private:
     auto entry = std::ranges::find_if(_externalProducerQueue, isTargetThread);
 
     if (entry != _externalProducerQueue.end()) {
+      cachedQueueIndex = std::distance(_externalProducerQueue.begin(), entry);
       return entry;
     }
 
@@ -475,7 +483,14 @@ private:
     }
 
     auto targetIndex = _activeProducers.fetch_add(1, std::memory_order_relaxed);
-    _externalProducerQueue[targetIndex].threadId = std::this_thread::get_id();
+    if (targetIndex >= _externalProducerQueue.size()) {
+      _activeProducers.fetch_sub(1, std::memory_order_relaxed);
+      return std::unexpected(
+          std::format("No producers can be registered for this event queue[{}]",
+                      _queueName, _maxProducerThreads));
+    }
+    _externalProducerQueue[targetIndex].threadId = currentThreadId;
+    cachedQueueIndex = targetIndex;
     return _externalProducerQueue.begin() + targetIndex;
   }
 
@@ -516,6 +531,7 @@ private:
   using PayloadEntry = std::array<std::uint8_t, PayloadSize>;
   std::array<PayloadEntry, MaxProducerQueueSize> _localPayloads;
   std::optional<PostEntry> _preparedEntry{};
+  std::uint32_t _activeAsyncStoreEntries{0};
 };
 
 } // namespace medici::event_queue

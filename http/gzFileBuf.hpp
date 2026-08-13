@@ -14,12 +14,21 @@ public:
   }
 
   ~gzFileBuf() {
+    if (file == nullptr)
+      return;
     sync();
-    if (file)
-      gzclose(file);
+    gzclose(file);
   }
 
   bool isOpen() const { return file != nullptr; }
+
+  void close() {
+    sync();
+    if (file) {
+      gzclose(file);
+      file = nullptr;
+    }
+  }
 
 protected:
   int underflow() override {

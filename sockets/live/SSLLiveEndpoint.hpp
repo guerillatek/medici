@@ -533,11 +533,12 @@ protected:
             const auto ssl_rc = SSL_get_error(_sslSocket.get(), shutdownResult);
             _sslSocket.reset();
             if (ssl_rc == SSL_ERROR_SSL) {
-              char msg[1024];
-              ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
-              return std::unexpected(std::format(
-                  "SSL_shutdown failed on endpoint, name={}, msg={}",
-                  this->getConfig().name(), msg));
+              return true; // Already closed
+              // char msg[1024];
+              // ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+              // return std::unexpected(std::format(
+              //     "SSL_shutdown failed on endpoint, name={}, msg={}",
+              //    this->getConfig().name(), msg));
             }
           }
           _sslState = SSLState::Disconnected;
