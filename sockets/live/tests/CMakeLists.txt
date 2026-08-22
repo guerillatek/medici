@@ -1,6 +1,16 @@
 
 
 
+find_package(unofficial-brotli CONFIG QUIET)
+if(TARGET unofficial::brotli::brotlienc)
+    set(BROTLI_ENC_LIBRARY unofficial::brotli::brotlienc)
+    set(BROTLI_DEC_LIBRARY unofficial::brotli::brotlidec)
+else()
+    # Fall back to a system-installed brotli when the vcpkg port isn't available
+    set(BROTLI_ENC_LIBRARY brotlienc)
+    set(BROTLI_DEC_LIBRARY brotlidec)
+endif()
+
 add_executable(LiveSocketsTests 
     compileTests.cpp
     TCPClientServerTests.cpp
@@ -27,8 +37,8 @@ httpUtils
 ssl
 crypto
 z
-brotlienc
-brotlidec
+${BROTLI_ENC_LIBRARY}
+${BROTLI_DEC_LIBRARY}
 liveMediciSockets
 )
 

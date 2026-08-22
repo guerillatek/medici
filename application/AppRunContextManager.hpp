@@ -8,7 +8,6 @@
 #include "medici/sockets/live/IPEndpointPollManager.hpp"
 #include "medici/sockets/live/LiveSocketFactory.hpp"
 
-#include <Aeron.h>
 #include <format>
 #include <map>
 #include <memory>

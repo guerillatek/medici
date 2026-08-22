@@ -148,7 +148,9 @@ public:
   Expected sendFramedPayload(WSOpCode opCode, std::string_view payload,
                              CallableT cb = CallableT{}) {
     if (!_upgraded) {
-      return std::unexpected("WebSocket endpoint not upgraded");
+      return std::unexpected(
+          format("Cannot send payload. WebSocket endpoint, '{}' not upgraded",
+                 this->name()));
     }
 
     if constexpr (std::is_same_v<ServerSideEndpointT, BaseSocketEndpointT>) {

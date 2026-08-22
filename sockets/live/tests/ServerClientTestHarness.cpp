@@ -8,11 +8,11 @@ Expected ServerClientTestHarness::sslInitialization =
     crypto_utils::OpenSSLUtils::initSSL();
 
 std::string ServerClientTestHarness::serverCertFilePath =
-    http::writeBufferToTempFile(std::string_view{serverCertificate},
+    http::writeBufferToTempFile(std::string_view{medici::sockets::live::test_credentials::serverCertificate},
                                 "serverCert", ".pem");
 
 std::string ServerClientTestHarness::serverKeyFilePath =
-    http::writeBufferToTempFile(std::string_view{serverKey}, "serverKey",
+    http::writeBufferToTempFile(std::string_view{medici::sockets::live::test_credentials::serverKey}, "serverKey",
                                 ".key");
 
 } // namespace medici::tests
