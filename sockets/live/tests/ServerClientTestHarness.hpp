@@ -82,9 +82,10 @@ struct ServerClientTestHarness {
 
   medici::DisconnectedHandlerT clientDisconnectHandler =
       [this](const std::string &reason) {
-        BOOST_TEST_MESSAGE(std::format(" {} client disconnected: reason={}",
-                                       endpointType, reason));
-        return Expected{};
+        auto message = std::format(" {} client disconnected: reason={}",
+                                   endpointType, reason);
+        BOOST_TEST_MESSAGE(message);
+        return std::unexpected(message);
       };
 
   std::string serverResponse;

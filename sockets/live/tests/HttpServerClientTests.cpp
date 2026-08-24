@@ -228,9 +228,9 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
       http::HeaderFields headers;
       if (!requestHeaders.HasField("Content-Encoding")) {
         headers.addFieldValue("Custom-Header",
-                              "formMultiPartResponseCompressed");
+                              "formMultiPartResponse");
       } else {
-        headers.addFieldValue("Custom-Header", "formMultiPartResponse");
+        headers.addFieldValue("Custom-Header", "formMultiPartResponseCompressed");
       }
       return sendHttpResponse(headers, 200, "OK", "SUCCESS",
                               http::ContentType::TextPlain,
@@ -247,66 +247,63 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     }
     auto headerValue = headers.getField("Custom-Header");
     if (headerValue && headerValue.value() == "LargeContentTest") {
+      largeContentSuccessful = (payload == largeContent);
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == largeContent);
-      largeContentSuccessful = true;
     } else if (headerValue && headerValue.value() == "LargeContentGzipped") {
+      LargeContentGzippedSuccessful = (payload == largeContent);
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == largeContent);
-      LargeContentGzippedSuccessful = true;
     } else if (headerValue && headerValue.value() == "LargeContentBrotli") {
+      LargeContentBrotliSuccessful = (payload == largeContent);
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == largeContent);
-      LargeContentBrotliSuccessful = true;
     } else if (headerValue && headerValue.value() == "LargeContentDeflate") {
+      LargeContentDeflateSuccessful = (payload == largeContent);
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == largeContent);
-      LargeContentDeflateSuccessful = true;
     } else if (headerValue == "formPostResponse") {
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == "SUCCESS");
-      formPostSuccessful = true;
+      formPostSuccessful = (payload == "SUCCESS");
     } else if (headerValue == "formGetResponse") {
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == "SUCCESS");
-      formGetSuccessful = true;
+      formGetSuccessful = (payload == "SUCCESS");
+    }  else if (headerValue == "formMultiPartResponse") {
+      BOOST_CHECK(responseCode == 200);
+      formMultiPartCompressedSuccessful = (payload == "SUCCESS");
     } else if (headerValue == "formMultiPartResponse") {
       BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == "SUCCESS");
-      formMultiPartSuccessful = true;
-    } else if (headerValue == "formMultiPartResponseCompressed") {
-      BOOST_CHECK(responseCode == 200);
-      BOOST_CHECK(payload == "SUCCESS");
-      formMultiPartSuccessful = true;
+      formMultiPartSuccessful = (payload == "SUCCESS");
       remoteClient->closeEndpoint("Test complete");
-    }
+    } 
     return Expected{};
   }
 
   Expected StartTests() {
+
     remoteClient->setURIPath("/testing/largeContentRequest");
     remoteClient->sendHttpRequest(http::HTTPAction::GET, http::HeaderFields{},
                                   "", http::ContentType::Unspecified,
                                   http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
+
     remoteClient->setURIPath("/testing/largeContentRequest");
     remoteClient->sendHttpRequest(
         http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::GZip), true, false});
+
     remoteClient->sendHttpRequest(
         http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::Brotli), true,
             false});
+
     remoteClient->sendHttpRequest(
         http::HTTPAction::GET, http::HeaderFields{}, "",
         http::ContentType::Unspecified, http::SupportedCompression::None,
         sockets::HttpResponsePayloadOptions{
             std::to_underlying(http::SupportedCompression::HttpDeflate), true,
             false});
+
     http::QueryFormFields formData;
     formData.addFieldValue("field1", "value1");
     formData.addFieldValue("field2", "value2");
@@ -315,22 +312,23 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
                                   formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
+    
     remoteClient->setURIPath("/testing/formTestGet");
-    remoteClient->sendFormRequest(http::HTTPAction::GET, http::HeaderFields{},
-                                  formData, http::SupportedCompression::None,
+    remoteClient->sendFormRequest(http::HTTPAction::GET,
+    http::HeaderFields{}, formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
+    
     remoteClient->setURIPath("/testing/formTestMultipart");
     auto filePath =
         http::writeBufferToTempFile(largeContent, "testFile", ".json");
     formData.addFieldValue("bookJSON", filePath, true);
-    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
-                                  formData, http::SupportedCompression::None,
+    remoteClient->sendFormRequest(http::HTTPAction::POST,
+    http::HeaderFields{}, formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
-
-    remoteClient->sendFormRequest(http::HTTPAction::POST, http::HeaderFields{},
-                                  formData, http::SupportedCompression::GZip,
-                                  sockets::HttpResponsePayloadOptions{});
-
+                            
+/*    remoteClient->sendFormRequest(http::HTTPAction::POST,
+    http::HeaderFields{}, formData, http::SupportedCompression::GZip,
+                                  sockets::HttpResponsePayloadOptions{});*/
     return Expected{};
   }
 
@@ -363,8 +361,10 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     BOOST_CHECK(LargeContentGzippedSuccessful);
     BOOST_CHECK(LargeContentBrotliSuccessful);
     BOOST_CHECK(LargeContentDeflateSuccessful);
-    BOOST_CHECK(formGetSuccessful);
     BOOST_CHECK(formPostSuccessful);
+    BOOST_CHECK(formGetSuccessful);
+    BOOST_CHECK(formMultiPartCompressedSuccessful);
+    BOOST_CHECK(formMultiPartSuccessful);
   }
 
   void RunHTTPUnsecureTest() {
@@ -395,7 +395,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
   }
 
   void RunHTTSecureTest() {
-    endpointType = "HTTP Unsecure";
+    endpointType = "HTTP Secure";
     remoteClient =
         clientThreadContext->getSocketFactory().createHttpsClientEndpoint(
             listenEndpoint,

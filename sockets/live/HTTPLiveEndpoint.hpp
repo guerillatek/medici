@@ -30,14 +30,13 @@ struct HttpResponseHeader {
   int responseCode{200};
   std::string message{"OK"};
 };
-using QueueContentT = std::variant<std::string, std::filesystem::path,
-                                   http::HeaderFields, http::MultipartPayload>;
-struct HttpSendQueueEntry {
+using HttpContentT = std::variant<std::string, std::filesystem::path,
+                                  http::HeaderFields, http::MultipartPayload>;
+struct HttpSendEntry {
   std::optional<http::HTTPAction> action;
   http::HeaderFields headersValues;
-  std::optional<HttpResponseHeader>
-      responseHeader; // For server side queued responses
-  QueueContentT content;
+  std::optional<HttpResponseHeader> responseHeader; // For server-side responses
+  HttpContentT content;
   http::SupportedCompression compression{http::SupportedCompression::None};
   std::string uriPath{};
   HttpResponsePayloadOptions responsePayloadOptions{};
@@ -50,7 +49,6 @@ class HTTPLiveEndpoint : public EndpointInterface,
 
   using BaseSocketEndpointT = BaseSocketEndpoint<SocketPayloadHandlerT>;
   using ParseExpected = std::expected<std::string, std::string>;
-  using HttpSendQueue = std::deque<HttpSendQueueEntry>;
 
 public:
   HTTPLiveEndpoint(const HttpEndpointConfig &config,
@@ -183,19 +181,13 @@ protected:
     return {};
   }
 
-  Expected sendQueuedHttpData() {
-    if (_sendQueue.empty()) {
-      return {};
-    }
-
-    auto &activeQueueEntry = _sendQueue.front();
-    auto &headersValues = activeQueueEntry.headersValues;
-    auto &responseHeader = activeQueueEntry.responseHeader;
-    auto &content = activeQueueEntry.content;
-    auto &compressionEncoding = activeQueueEntry.compression;
-    auto action = activeQueueEntry.action;
-    _uriPathWithQueryParams = activeQueueEntry.uriPath;
-    _responsePayloadOptions = activeQueueEntry.responsePayloadOptions;
+  Expected sendHttpData(HttpSendEntry activeSendEntry) {
+    auto &headersValues = activeSendEntry.headersValues;
+    auto &responseHeader = activeSendEntry.responseHeader;
+    auto &content = activeSendEntry.content;
+    auto &compressionEncoding = activeSendEntry.compression;
+    auto action = activeSendEntry.action;
+    _uriPathWithQueryParams = activeSendEntry.uriPath;
     _compressedData.clear();
 
     auto compressStringContent =
@@ -323,7 +315,10 @@ protected:
       return BaseSocketEndpointT::sendAsync(
           payload, [this]() { return onPayloadSent(); });
     }
-
+    if (!_serverSide) {
+      // FIFO: response options are applied in the order requests were sent
+      _pendingResponseOptions.push_back(activeSendEntry.responsePayloadOptions);
+    }
     return std::visit(
         [&, this](auto &targetContent) -> Expected {
           using T = std::decay_t<decltype(targetContent)>;
@@ -412,18 +407,29 @@ protected:
     if (_serverSide) {
       _state = HttpEndpointState::AwaitingClientRequest;
     } else {
-      _state = HttpEndpointState::AwaitingUserRequest;
+      if (!_pendingResponseOptions.empty()) {
+        _responsePayloadOptions = _pendingResponseOptions.front();
+        _pendingResponseOptions.pop_front();
+      }
+      _state = _pendingResponseOptions.empty()
+                   ? HttpEndpointState::AwaitingUserRequest
+                   : HttpEndpointState::AwaitingResponse;
     }
     if (compression != http::SupportedCompression::None) {
       if (_serverSide || (_responsePayloadOptions.decompressBeforeDispatch)) {
-        auto decompressionResult = http::decompressPayloadToBuffer(
-            _httpBody, compression, _decompressedBody);
+        auto decompressionResult = decompressPayload(
+                  _httpBody, compression);
         if (!decompressionResult) {
           return std::unexpected(
               std::format("Failed to decompress incoming payload: error={}",
                           decompressionResult.error()));
         }
         return _payLoadHandler(_activeHeaders, _decompressedBody, epollTime);
+      }
+    }
+    else {
+      if (_compressionContext) {
+        closeCompressionContext();
       }
     }
 
@@ -435,28 +441,31 @@ protected:
       return {};
     }
     if (_serverSide) {
-      _state = HttpEndpointState::AwaitingClientRequest;
+      if (_state != HttpEndpointState::ReadingHeaders && _state != HttpEndpointState::ReadingContent &&
+          _state != HttpEndpointState::ReadingChunks) {
+        _state = HttpEndpointState::AwaitingClientRequest;
+      }
     } else {
       _state = HttpEndpointState::AwaitingResponse;
-    }
-    _sendQueue.pop_front();
-    if (!_sendQueue.empty()) {
-      return sendQueuedHttpData();
     }
     return {};
   }
 
-  Expected readContent(std::spanstream &payloadStream, TimePoint epollTime) {
-    auto positionInBuff = payloadStream.tellg();
-    auto remainingSize = _activePayload.size() - positionInBuff;
-    if ((_httpBody.size() + remainingSize) <= (*_contentSize)) {
-      std::copy(_activePayload.begin() + positionInBuff, _activePayload.end(),
+  Expected readContent(std::ispanstream &payloadStream, TimePoint epollTime) {
+    auto streamSpan = payloadStream.span();
+    auto remainingStreamSize =
+        payloadStream.span().size() - payloadStream.tellg();
+    auto streamCopyStart = streamSpan.begin() + payloadStream.tellg();
+
+    if ((_httpBody.size() + remainingStreamSize) <= (*_contentSize)) {
+      std::copy(streamCopyStart, streamSpan.end(),
                 std::back_inserter(_httpBody));
+      payloadStream.seekg(payloadStream.span().size()); // Move eof
     } else {
-      std::copy(_activePayload.begin() + positionInBuff,
-                _activePayload.begin() + positionInBuff +
-                    (*_contentSize - _httpBody.size()),
+      auto remainingToRead = (*_contentSize - _httpBody.size());
+      std::copy(streamCopyStart, streamCopyStart + remainingToRead,
                 std::back_inserter(_httpBody));
+      payloadStream.seekg(remainingToRead, std::ios_base::cur);
     }
 
     if (_httpBody.size() >= (*_contentSize)) {
@@ -465,7 +474,7 @@ protected:
     return {};
   }
 
-  Expected readChunks(std::spanstream &payloadStream, TimePoint epollTime) {
+  Expected readChunks(std::ispanstream &payloadStream, TimePoint epollTime) {
     while (!payloadStream.eof()) {
       if (!_chunkSize) {
         auto expectedLine = getline_expected(payloadStream);
@@ -483,24 +492,45 @@ protected:
       }
 
       if (*_chunkSize == 0) {
-        // We're done with chunking so clear the chunked state and dispatch
+        // Last chunk marker: must still consume any trailer header lines and
+        // the final blank line terminating the chunked message before
+        // dispatching, otherwise that trailing CRLF leaks into the next
+        // payload processed under the post-dispatch state. _chunkSize stays
+        // at 0 so a terminator split across payloads resumes here.
+        ParseExpected trailerLine;
+        bool foundTerminator = false;
+        while ((trailerLine = getline_expected(payloadStream))) {
+          if (trim(trailerLine.value()).empty()) {
+            foundTerminator = true;
+            break;
+          }
+          // Trailer header fields are currently ignored.
+        }
+        if (!foundTerminator) {
+          return this->prependPartialContent(trailerLine.error().c_str(),
+                                             trailerLine.error().size());
+        }
         _chunkedBody.clear();
         _chunkSize.reset();
         _chunkedResponse = false;
         return dispatchPayload(epollTime);
       }
 
+      // Positions are absolute within the stream span, not within
+      // _activePayload, which has already had consumed bytes trimmed off.
+      auto streamSpan = payloadStream.span();
       std::uint64_t positionInBuff = payloadStream.tellg();
-      auto remainingPayloadSize = _activePayload.size() - positionInBuff;
+      auto remainingPayloadSize = streamSpan.size() - positionInBuff;
       if (remainingPayloadSize < *_chunkSize) {
-        std::copy(_activePayload.begin() + positionInBuff, _activePayload.end(),
+        std::copy(streamSpan.begin() + positionInBuff, streamSpan.end(),
                   std::back_inserter(_chunkedBody));
         *_chunkSize -= remainingPayloadSize;
+        payloadStream.seekg(streamSpan.size());
         return {};
 
       } else {
-        std::copy(_activePayload.begin() + positionInBuff,
-                  _activePayload.begin() + positionInBuff + *_chunkSize,
+        std::copy(streamSpan.begin() + positionInBuff,
+                  streamSpan.begin() + positionInBuff + *_chunkSize,
                   std::back_inserter(_chunkedBody));
 
         _httpBody += _chunkedBody;
@@ -520,7 +550,7 @@ protected:
                : str.substr(first, last - first + 1);
   }
 
-  Expected readHeaders(std::spanstream &payloadStream, TimePoint epollTime) {
+  Expected readHeaders(std::ispanstream &payloadStream, TimePoint epollTime) {
     ParseExpected result;
     _httpBody.clear();
 
@@ -593,29 +623,47 @@ protected:
   Expected handleBaseSocketInboundPayload(std::string_view payload,
                                           TimePoint epollTime) {
 
-    _activePayload = payload;
-
-    auto payloadStream = std::spanstream{
+    auto totalSize = payload.size();
+    if (_state == HttpEndpointState::WebsocketPassthrough) {
+      return _payLoadHandler(_activeHeaders, payload, epollTime);
+    }
+    auto payloadStream = std::ispanstream{
         std::span{const_cast<char *>(payload.data()),
                   const_cast<char *>(payload.data()) + payload.size()}};
 
+    while (payloadStream.tellg() < totalSize) {
+      _activePayload = payload;
+      _activePayload.remove_prefix(payloadStream.tellg());
+      if (auto result =
+              handleBaseSocketInboundPayload(payloadStream, epollTime);
+          !result) {
+        return result;
+      }
+    }
+    return {}; // All data processed successfully
+  }
+
+  Expected handleBaseSocketInboundPayload(std::ispanstream &payloadStream,
+                                          TimePoint epollTime) {
+
     auto hasFullHeaderLine = [&]() {
-      return payload.find("\r\n") != std::string::npos;
+      return _activePayload.find("\r\n") != std::string::npos;
     };
 
     switch (_state) {
     case HttpEndpointState::WebsocketPassthrough:
-      return _payLoadHandler(_activeHeaders, payload, epollTime);
+      return std::unexpected(
+          "WebsocketPassthrough state should not reach this point");
     case HttpEndpointState::AwaitingUserRequest:
       return {}; // Ignore unexpected data ... some http servers may send
                  // unsolicited data.
     case HttpEndpointState::AwaitingClientRequest: {
       if (!hasFullHeaderLine()) {
-        this->prependPartialContent(payload.data(), payload.size());
+        this->prependPartialContent(_activePayload.data(),
+                                    _activePayload.size());
         return {};
       }
       resetIncomingHttpState();
-      _activePayload = payload;
       std::string httpMethod;
       std::string httpVersion;
       payloadStream >> httpMethod >> _incomingURIPath;
@@ -633,14 +681,15 @@ protected:
       _incomingAction = actionResult.value();
       return readHeaders(payloadStream, epollTime);
     }
+
     case HttpEndpointState::AwaitingResponse: {
       if (!hasFullHeaderLine()) {
-        return this->prependPartialContent(payload.data(), payload.size());
+        return this->prependPartialContent(_activePayload.data(),
+                                           _activePayload.size());
       }
       resetIncomingHttpState();
       std::string httpVersion;
       std::string responsePhrase;
-      _activePayload = payload;
       payloadStream >> httpVersion >> _responseCode;
       std::getline(payloadStream, responsePhrase);
       // Start reading headers
@@ -656,7 +705,7 @@ protected:
     return {};
   }
 
-  ParseExpected getline_expected(std::spanstream &payloadStream) {
+  ParseExpected getline_expected(std::ispanstream &payloadStream) {
     std::string line;
     char ch;
     bool hasEOL = false;
@@ -681,6 +730,62 @@ protected:
   }
 
 protected:
+
+ auto compressionActive() const {
+    return _compressionContext.has_value() && (_activeCompressionFormat == http::SupportedCompression::Brotli);
+  }
+
+ auto &getCompressionContext() { return *_compressionContext; }
+
+ auto initializeDecompressionCompressionContext(http::SupportedCompression compressionFormat) ->Expected {
+    if (_compressionContext.has_value() && _activeCompressionFormat == compressionFormat) {
+      return {};
+    }
+    _activeCompressionFormat = compressionFormat;
+    if (compressionFormat == http::SupportedCompression::Brotli){
+      _compressionContext.reset();
+      return {};
+    }
+    _compressionContext = z_stream{};
+    if (auto result = http::openZStreamDecompression(
+            *_compressionContext, compressionFormat);
+        !result) {
+      return std::unexpected(
+          std::format("Failed to initialize z_stream context for "
+                      "endpoint, error={}",
+                      result.error()));
+    }
+    return {};
+  }
+
+  Expected initializeCompressionContext(http::SupportedCompression compressionFormat) {
+    _compressionContext = z_stream{};
+    if (auto result = http::openZStreamCompression(
+            *_compressionContext, compressionFormat);
+        !result) {
+      return std::unexpected(
+          std::format("Failed to initialize z_stream context for websocket "
+                      "endpoint, error={}",
+                      result.error()));
+    }
+    return {};
+  }
+
+  Expected closeCompressionContext() {
+    if (_compressionContext) {
+      if (auto result = http::closeZStream(*_compressionContext); !result) {
+        return std::unexpected(
+            std::format("Failed to close z_stream context for websocket "
+                        "endpoint, error={}",
+                        result.error()));
+      }
+      _compressionContext.reset();
+    }
+    return {};
+  }
+
+
+
   void setPassThrough(bool passThroughState) {
     if (passThroughState)
       _state = HttpEndpointState::WebsocketPassthrough;
@@ -701,7 +806,6 @@ protected:
     _compression.reset();
     _httpBody.clear();
     _decompressedBody.clear();
-    _activePayload = {};
     _chunkedResponse = false;
     _responseCode = 0;
     _chunkSize.reset();
@@ -709,13 +813,15 @@ protected:
     if (_serverSide) {
       _state = HttpEndpointState::AwaitingClientRequest;
     } else {
-      _state = HttpEndpointState::AwaitingUserRequest;
+      _state = _pendingResponseOptions.empty()
+                   ? HttpEndpointState::AwaitingUserRequest
+                   : HttpEndpointState::AwaitingResponse;
     }
   }
 
   void resetHttpState() {
     resetIncomingHttpState();
-    _sendQueue.clear();
+    _pendingResponseOptions.clear();
   }
 
   auto &getCompressedDataBuffer() { return _compressedData; }
@@ -729,8 +835,53 @@ protected:
 
   auto &getRequestURIPath() const { return _incomingURIPath; }
 
+  auto hasCompressionBlockTail(std::string_view messagePayload) {
+    if (messagePayload.size() < 4) {
+      return false;
+    }
+    const std::array<char, 4> deflateBlockTail{
+        0x00, 0x00, static_cast<char>(0xff), static_cast<char>(0xff)};
+    return std::equal(deflateBlockTail.begin(), deflateBlockTail.end(),
+                      messagePayload.end() - 4);
+  }
+
+  auto amendCompressionBlockTailIfMissing(std::string_view messagePayload) {
+    if (hasCompressionBlockTail(messagePayload)) {
+      return messagePayload;
+    }
+
+    _preDecompressionBuffer.clear();
+    std::copy(messagePayload.begin(), messagePayload.end(),
+              std::back_inserter(_preDecompressionBuffer));
+    // Append the 0x00, 0x00, 0xff, 0xff tail to indicate end of
+    // compressed block as per RFC 7692 for permessage-deflate compressed
+    // messages with no context takeover
+    const std::array<char, 4> deflateBlockTail{
+        0x00, 0x00, static_cast<char>(0xff), static_cast<char>(0xff)};
+    std::copy(deflateBlockTail.begin(), deflateBlockTail.end(),
+              std::back_inserter(_preDecompressionBuffer));
+
+    return std::string_view{_preDecompressionBuffer.data(),
+                            _preDecompressionBuffer.size()};
+  }
+
+  auto decompressPayload(std::string_view payload,
+                                 http::SupportedCompression compression) {
+    _decompressedBody.clear();
+    // Only RFC 7692 permessage-deflate frames are shipped without the
+    // terminating empty block; gzip/deflate HTTP bodies are complete streams.
+    if (compression != http::SupportedCompression::WSDeflate) {
+      return http::decompressPayloadToBuffer(payload, compression,
+                                             _decompressedBody);
+    }
+    return http::decompressPayloadToBuffer(amendCompressionBlockTailIfMissing(payload), compression,
+                                           _decompressedBody,
+                                           *_compressionContext);
+  }
+
+
+
   std::unique_ptr<std::ifstream> _activeFileStream{};
-  HttpSendQueue _sendQueue{};
   std::string _uriPath;
   std::string _uriPathWithQueryParams;
   std::string _incomingURIPath;
@@ -751,5 +902,10 @@ protected:
   HttpEndpointState _state{};
   http::HTTPAction _incomingAction{};
   bool _serverSide{false};
+  std::deque<HttpResponsePayloadOptions> _pendingResponseOptions{};
+  std::optional<z_stream> _compressionContext{};
+  http::SupportedCompression _activeCompressionFormat{http::SupportedCompression::None};
+  std::vector<char> _preDecompressionBuffer{};
+
 };
 } // namespace medici::sockets::live

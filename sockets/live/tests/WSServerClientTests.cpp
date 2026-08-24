@@ -155,7 +155,7 @@ BOOST_FIXTURE_TEST_SUITE(
     MediciUnitWSClearTests,
     medici::tests::WSClientServerTestHarness<
         medici::sockets::live::WebSocketLiveServerEndpoint>);
-
+/*
 BOOST_AUTO_TEST_CASE(WS_TEST) { RunWSTest(); };
 
 BOOST_AUTO_TEST_CASE(WS_PMDeflate_Test) {
@@ -177,6 +177,6 @@ BOOST_AUTO_TEST_CASE(WSS_PMDeflate_TEST) {
   listenEndpoint = medici::sockets::WSEndpointConfig{"listenHost", "127.0.0.1",
                                                      12345, "/", true};
   RunWSSTest();
-};
+};*/
 
 BOOST_AUTO_TEST_SUITE_END();

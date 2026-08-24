@@ -12,7 +12,6 @@ class HTTPLiveClientEndpoint
       HTTPLiveEndpoint<HttpPayloadHandlerT, BaseSocketEndpoint,
                        IHttpClientEndpoint>;
   using ParseExpected = std::expected<std::string, std::string>;
-  using HttpSendQueue = std::deque<HttpSendQueueEntry>;
 
   Expected applyAcceptedCompressions(
       const HttpResponsePayloadOptions &responsePayloadOptions,
@@ -77,13 +76,6 @@ public:
                               if (!result) {
                                 return result;
                               }
-                              if (!this->_sendQueue.empty()) {
-                                return this->getConnectionManager()
-                                    .getEventQueue()
-                                    .postAction([this]() {
-                                      return this->sendQueuedHttpData();
-                                    });
-                              }
                               return Expected{};
                             },
                             std::forward<decltype(outgoingPayloadHandler)>(
@@ -109,15 +101,10 @@ public:
         !result) {
       return result;
     }
-    auto canSend = this->_sendQueue.empty();
     this->_uriPathWithQueryParams = this->_uriPath;
-    this->_sendQueue.emplace_back(
+    return this->sendHttpData(HttpSendEntry{
         action, headersValues, std::nullopt, std::string{content}, compression,
-        this->_uriPathWithQueryParams, responsePayloadOptions);
-    if (canSend) {
-      return this->sendQueuedHttpData();
-    }
-    return {};
+      this->_uriPathWithQueryParams, responsePayloadOptions});
   }
 
   Expected sendFormRequest(
@@ -126,7 +113,7 @@ public:
       http::SupportedCompression compression = http::SupportedCompression::None,
       HttpResponsePayloadOptions responsePayloadOptions = {}) override {
 
-    auto canSend = this->_sendQueue.empty();
+    this->_uriPathWithQueryParams = this->_uriPath;
     if (action != http::HTTPAction::POST && action != http::HTTPAction::GET) {
       return std::unexpected(
           "Form submissions must use POST or GET HTTP actions");
@@ -158,9 +145,9 @@ public:
         return result;
       }
 
-      this->_sendQueue.emplace_back(
+        return this->sendHttpData(HttpSendEntry{
           action, headersValues, std::nullopt, multipartPayload, compression,
-          this->_uriPathWithQueryParams, responsePayloadOptions);
+          this->_uriPathWithQueryParams, responsePayloadOptions});
 
     } else {
       // No file content so encode as URL encoded form
@@ -200,16 +187,10 @@ public:
         return result;
       }
 
-      this->_sendQueue.emplace_back(
+      return this->sendHttpData(HttpSendEntry{
           action, headersValues, std::nullopt, payload, compression,
-          this->_uriPathWithQueryParams, responsePayloadOptions);
+          this->_uriPathWithQueryParams, responsePayloadOptions});
     }
-
-    if (canSend) {
-      return this->sendQueuedHttpData();
-    }
-
-    return {};
   }
 };
 } // namespace medici::sockets::live

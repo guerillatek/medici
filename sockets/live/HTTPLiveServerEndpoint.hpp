@@ -12,7 +12,6 @@ class HTTPLiveServerEndpoint
       HTTPLiveEndpoint<HttpPayloadHandlerT, BaseSocketEndpoint,
                        IHttpServerEndpoint>;
   using ParseExpected = std::expected<std::string, std::string>;
-  using HttpSendQueue = std::deque<HttpSendQueueEntry>;
 
 public:
   HTTPLiveServerEndpoint(int fd, const HttpEndpointConfig &config,
@@ -43,16 +42,10 @@ public:
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compression =
           http::SupportedCompression::None) override {
-    auto canSend = this->_sendQueue.empty();
-    this->_sendQueue.emplace_back(
+    return this->sendHttpData(HttpSendEntry{
         std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
         std::string{content}, compression, this->_uriPathWithQueryParams,
-        HttpResponsePayloadOptions{});
-    if (!canSend) {
-      return {};
-    }
-    return this->sendQueuedHttpData();
-    // queue was empty so we can send immediately
+      HttpResponsePayloadOptions{}});
   }
 
   Expected sendFileResponse(
@@ -61,22 +54,16 @@ public:
       http::ContentType contentType = http::ContentType::Unspecified,
       http::SupportedCompression compressed =
           http::SupportedCompression::None) override {
-    auto canSend = this->_sendQueue.empty();
     auto targetContent = std::filesystem::path{filePath};
     if (!std::filesystem::exists(targetContent) ||
         !std::filesystem::is_regular_file(targetContent)) {
       return std::unexpected(std::format("file '{}' does not exist", filePath));
     }
     this->_uriPathWithQueryParams = this->_uriPath;
-    this->_sendQueue.emplace_back(
+    return this->sendHttpData(HttpSendEntry{
         std::nullopt, headersValues, HttpResponseHeader{responseCode, message},
         targetContent, compressed, this->_uriPathWithQueryParams,
-        HttpResponsePayloadOptions{});
-    if (!canSend) {
-      return {};
-    }
-    return this->sendQueuedHttpData();
-    // queue was empty so we can send immediately
+      HttpResponsePayloadOptions{}});
   }
 
 private:

@@ -166,7 +166,7 @@ public:
                                    CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
+    const bool compressed = this->compressionActive() && (opCode == WSOpCode::Text |
                                                     opCode == WSOpCode::Binary);
     if (compressed) {
       if (auto deflatedResult = http::compressPayload(
@@ -245,11 +245,11 @@ public:
                                    CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = _compressionContext && (opCode == WSOpCode::Text ||
+    const bool compressed = this->compressionActive() && (opCode == WSOpCode::Text ||
                                                     opCode == WSOpCode::Binary);
     if (compressed) {
       if (auto deflatedResult = http::compressZStream(
-              *_compressionContext, payload, this->getCompressedDataBuffer());
+              this->getCompressionContext(), payload, this->getCompressedDataBuffer());
           !deflatedResult) {
         return std::unexpected(std::format(
             "Failed to deflate websocket payload, endpoint name={}, error={}",
@@ -415,7 +415,7 @@ private:
           auto extValue = extField.value();
           if (extValue.find("permessage-deflate") != std::string::npos) {
             // Client requested permessage-deflate extension
-            if (auto result = initializeCompressionContext(); !result) {
+            if (auto result = this->initializeCompressionContext(http::SupportedCompression::WSDeflate); !result) {
               return result;
             }
             responseHeaders.addFieldValue(
@@ -458,7 +458,7 @@ private:
         auto extValue = extField.value();
         if (extValue.find("permessage-deflate") != std::string::npos) {
           // Server accepted permessage-deflate extension
-          if (auto result = initializeDecompressionCompressionContext();
+          if (auto result = this->initializeDecompressionCompressionContext(http::SupportedCompression::WSDeflate);
               !result) {
             return result;
           }
@@ -682,26 +682,8 @@ private:
           _maskingKey.reset();
         }
         if (_compressedMessage) {
-          _preDecompressionBuffer.clear();
-          std::copy(messagePayload.begin(), messagePayload.end(),
-                    std::back_inserter(_preDecompressionBuffer));
-          // Append the 0x00, 0x00, 0xff, 0xff tail to indicate end of
-          // compressed block as per RFC 7692 for permessage-deflate compressed
-          // messages with no context takeover
-          const std::array<char, 4> deflateBlockTail{
-              0x00, 0x00, static_cast<char>(0xff), static_cast<char>(0xff)};
-          std::copy(deflateBlockTail.begin(), deflateBlockTail.end(),
-                    std::back_inserter(_preDecompressionBuffer));
-
-          messagePayload = std::string_view{_preDecompressionBuffer.data(),
-                                            _preDecompressionBuffer.size()};
-
-          auto &deflateBuffer = this->getCompressedDataBuffer();
-          deflateBuffer.clear();
-          if (auto deflatedResult = http::decompressPayloadToBuffer(
-                  messagePayload, http::SupportedCompression::WSDeflate,
-                  BaseSocketEndpointT::getDecompressedBodyBuffer(),
-                  *_compressionContext);
+          if (auto deflatedResult = this->decompressPayload(
+                  messagePayload, http::SupportedCompression::WSDeflate);
               !deflatedResult) {
             return std::unexpected(std::format(
                 "Failed to inflate websocket payload, endpoint_name='{}', "
@@ -780,47 +762,8 @@ private:
     _finalFrame = 0;
     _readBufferOffset = 0;
     _compressedMessage = false;
-    closeCompressionContext();
+    this->closeCompressionContext();
     BaseSocketEndpointT::resetHttpState();
-  }
-
-  Expected initializeDecompressionCompressionContext() {
-    _compressionContext = z_stream{};
-    if (auto result = http::openZStreamDecompression(
-            *_compressionContext, http::SupportedCompression::WSDeflate);
-        !result) {
-      return std::unexpected(
-          std::format("Failed to initialize z_stream context for websocket "
-                      "endpoint, error={}",
-                      result.error()));
-    }
-    return {};
-  }
-
-  Expected initializeCompressionContext() {
-    _compressionContext = z_stream{};
-    if (auto result = http::openZStreamCompression(
-            *_compressionContext, http::SupportedCompression::WSDeflate);
-        !result) {
-      return std::unexpected(
-          std::format("Failed to initialize z_stream context for websocket "
-                      "endpoint, error={}",
-                      result.error()));
-    }
-    return {};
-  }
-
-  Expected closeCompressionContext() {
-    if (_compressionContext) {
-      if (auto result = http::closeZStream(*_compressionContext); !result) {
-        return std::unexpected(
-            std::format("Failed to close z_stream context for websocket "
-                        "endpoint, error={}",
-                        result.error()));
-      }
-      _compressionContext.reset();
-    }
-    return {};
   }
 
   std::vector<char> _sendBuffer;
@@ -839,7 +782,6 @@ private:
   bool _finalFrame{false};
   std::uint32_t _readBufferOffset{0};
   bool _deflateRequested{false};
-  std::optional<z_stream> _compressionContext{};
   bool _compressedMessage{false};
 };
 
