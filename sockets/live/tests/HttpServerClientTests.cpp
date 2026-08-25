@@ -267,7 +267,7 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     }  else if (headerValue == "formMultiPartResponse") {
       BOOST_CHECK(responseCode == 200);
       formMultiPartCompressedSuccessful = (payload == "SUCCESS");
-    } else if (headerValue == "formMultiPartResponse") {
+    } else if (headerValue == "formMultiPartResponseCompressed") {
       BOOST_CHECK(responseCode == 200);
       formMultiPartSuccessful = (payload == "SUCCESS");
       remoteClient->closeEndpoint("Test complete");
@@ -326,9 +326,9 @@ struct HttpServerClientTestHarness : ServerClientTestHarness {
     http::HeaderFields{}, formData, http::SupportedCompression::None,
                                   sockets::HttpResponsePayloadOptions{});
                             
-/*    remoteClient->sendFormRequest(http::HTTPAction::POST,
+    remoteClient->sendFormRequest(http::HTTPAction::POST,
     http::HeaderFields{}, formData, http::SupportedCompression::GZip,
-                                  sockets::HttpResponsePayloadOptions{});*/
+                                  sockets::HttpResponsePayloadOptions{});
     return Expected{};
   }
 

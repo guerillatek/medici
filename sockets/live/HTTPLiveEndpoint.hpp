@@ -190,6 +190,13 @@ protected:
     _uriPathWithQueryParams = activeSendEntry.uriPath;
     _compressedData.clear();
 
+    auto addContentEncodingHeader = [&]() {
+      if (!headersValues.HasField("Content-Encoding")) {
+        headersValues.addFieldValue("Content-Encoding",
+                                    to_encoding_value(compressionEncoding));
+      }
+    };
+
     auto compressStringContent =
         [&](const std::string &targetContent) -> Expected {
       auto compressionResult = http::compressPayload(
@@ -201,8 +208,7 @@ protected:
       }
       headersValues.addFieldValue("Content-Length",
                                   std::to_string(_compressedData.size()));
-      headersValues.addFieldValue("Content-Encoding",
-                                  to_encoding_value(compressionEncoding));
+      addContentEncodingHeader();
       return {};
     };
 
@@ -267,8 +273,7 @@ protected:
               }
               headersValues.addFieldValue(
                   "Content-Length", std::to_string(_compressedData.size()));
-              headersValues.addFieldValue(
-                  "Content-Encoding", to_encoding_value(compressionEncoding));
+              addContentEncodingHeader();
             } else {
               auto fileSize = std::filesystem::file_size(targetContent);
               if (fileSize > 0) {
@@ -306,6 +311,11 @@ protected:
       payload = result.value();
     }
 
+    if (!_serverSide) {
+      // FIFO: response options are applied in the order requests were sent
+      _pendingResponseOptions.push_back(activeSendEntry.responsePayloadOptions);
+    }
+
     // If we have compressed data set, then just send that
     // as any relevant content would have been compressed
     // into this buffer at this point
@@ -314,10 +324,6 @@ protected:
                 std::back_inserter(payload));
       return BaseSocketEndpointT::sendAsync(
           payload, [this]() { return onPayloadSent(); });
-    }
-    if (!_serverSide) {
-      // FIFO: response options are applied in the order requests were sent
-      _pendingResponseOptions.push_back(activeSendEntry.responsePayloadOptions);
     }
     return std::visit(
         [&, this](auto &targetContent) -> Expected {

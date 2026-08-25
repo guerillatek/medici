@@ -13,10 +13,10 @@ endif()
 
 add_executable(LiveSocketsTests 
     compileTests.cpp
-    #TCPClientServerTests.cpp
+    TCPClientServerTests.cpp
     ServerClientTestHarness.cpp
     HttpServerClientTests.cpp
-    #WSServerClientTests.cpp
+    WSServerClientTests.cpp
 )
 target_include_directories(LiveSocketsTests PUBLIC ../../../..)
 
