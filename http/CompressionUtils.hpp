@@ -182,7 +182,7 @@ Expected openZStreamDecompression(z_stream &strm,
 Expected openZStreamCompression(z_stream &strm,
                                 SupportedCompression compressionType);
 
-Expected closeZStream(z_stream &strm);
+Expected closeZStream(z_stream &strm, bool isDeflateStream);
 
 Expected decompressPayloadToBuffer(std::string_view compressedPayload,
                                    SupportedCompression compressionType,

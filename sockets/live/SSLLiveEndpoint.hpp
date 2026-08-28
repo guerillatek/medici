@@ -292,6 +292,7 @@ public:
                       this->getConfig().name()));
     }
 
+    
     int bytesWritten = SSL_write(
         _sslSocket.get(), this->getOutboundBuffer().data() + _asyncBytesSent,
         this->getOutboundBuffer().size() - _asyncBytesSent);

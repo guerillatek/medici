@@ -293,8 +293,9 @@ Expected openZStreamCompression(z_stream &strm,
   return Expected{};
 }
 
-Expected closeZStream(z_stream &strm) {
-  if (inflateEnd(&strm) != Z_OK) {
+Expected closeZStream(z_stream &strm, bool isDeflateStream) {
+  auto ret = isDeflateStream ? deflateEnd(&strm) : inflateEnd(&strm);
+  if (ret != Z_OK) {
     return std::unexpected("Failed to clean up zlib stream");
   }
   return Expected{};

@@ -423,8 +423,7 @@ protected:
     }
     if (compression != http::SupportedCompression::None) {
       if (_serverSide || (_responsePayloadOptions.decompressBeforeDispatch)) {
-        auto decompressionResult = decompressPayload(
-                  _httpBody, compression);
+        auto decompressionResult = decompressPayload(_httpBody, compression);
         if (!decompressionResult) {
           return std::unexpected(
               std::format("Failed to decompress incoming payload: error={}",
@@ -432,8 +431,7 @@ protected:
         }
         return _payLoadHandler(_activeHeaders, _decompressedBody, epollTime);
       }
-    }
-    else {
+    } else {
       if (_compressionContext) {
         closeCompressionContext();
       }
@@ -447,7 +445,8 @@ protected:
       return {};
     }
     if (_serverSide) {
-      if (_state != HttpEndpointState::ReadingHeaders && _state != HttpEndpointState::ReadingContent &&
+      if (_state != HttpEndpointState::ReadingHeaders &&
+          _state != HttpEndpointState::ReadingContent &&
           _state != HttpEndpointState::ReadingChunks) {
         _state = HttpEndpointState::AwaitingClientRequest;
       }
@@ -736,25 +735,27 @@ protected:
   }
 
 protected:
+  auto compressionActive() const { return _compressionContext.has_value(); }
 
- auto compressionActive() const {
-    return _compressionContext.has_value() && (_activeCompressionFormat == http::SupportedCompression::Brotli);
-  }
+  auto &getCompressionContext() { return *_compressionContext; }
+  auto &getDecompressionContext() { return *_decompressionContext; }
 
- auto &getCompressionContext() { return *_compressionContext; }
-
- auto initializeDecompressionCompressionContext(http::SupportedCompression compressionFormat) ->Expected {
-    if (_compressionContext.has_value() && _activeCompressionFormat == compressionFormat) {
+  auto initializeDecompressionCompressionContext(
+      http::SupportedCompression compressionFormat) -> Expected {
+    if (_decompressionContext.has_value() &&
+        _activeCompressionFormat == compressionFormat) {
       return {};
     }
     _activeCompressionFormat = compressionFormat;
-    if (compressionFormat == http::SupportedCompression::Brotli){
-      _compressionContext.reset();
+    if (compressionFormat == http::SupportedCompression::Brotli) {
+      _decompressionContext.reset();
       return {};
     }
-    _compressionContext = z_stream{};
-    if (auto result = http::openZStreamDecompression(
-            *_compressionContext, compressionFormat);
+    // Independent from _compressionContext: zlib requires separate deflate
+    // and inflate stream state, and each direction keeps its own LZ77 window.
+    _decompressionContext = z_stream{};
+    if (auto result = http::openZStreamDecompression(*_decompressionContext,
+                                                     compressionFormat);
         !result) {
       return std::unexpected(
           std::format("Failed to initialize z_stream context for "
@@ -764,10 +765,11 @@ protected:
     return {};
   }
 
-  Expected initializeCompressionContext(http::SupportedCompression compressionFormat) {
+  Expected
+  initializeCompressionContext(http::SupportedCompression compressionFormat) {
     _compressionContext = z_stream{};
-    if (auto result = http::openZStreamCompression(
-            *_compressionContext, compressionFormat);
+    if (auto result = http::openZStreamCompression(*_compressionContext,
+                                                   compressionFormat);
         !result) {
       return std::unexpected(
           std::format("Failed to initialize z_stream context for websocket "
@@ -779,7 +781,8 @@ protected:
 
   Expected closeCompressionContext() {
     if (_compressionContext) {
-      if (auto result = http::closeZStream(*_compressionContext); !result) {
+      if (auto result = http::closeZStream(*_compressionContext, true);
+          !result) {
         return std::unexpected(
             std::format("Failed to close z_stream context for websocket "
                         "endpoint, error={}",
@@ -787,10 +790,37 @@ protected:
       }
       _compressionContext.reset();
     }
+    if (_decompressionContext) {
+      if (auto result = http::closeZStream(*_decompressionContext, false);
+          !result) {
+        return std::unexpected(
+            std::format("Failed to close z_stream context for websocket "
+                        "endpoint, error={}",
+                        result.error()));
+      }
+      _decompressionContext.reset();
+    }
     return {};
   }
 
+  // RFC 7692 no_context_takeover: discard the LZ77 window after each message
+  // so every frame is independently decodable regardless of peer support.
+  Expected resetCompressionContext() {
+    if (_compressionContext && deflateReset(&*_compressionContext) != Z_OK) {
+      return std::unexpected(
+          "Failed to reset deflate stream for websocket endpoint");
+    }
+    return {};
+  }
 
+  Expected resetDecompressionContext() {
+    if (_decompressionContext &&
+        inflateReset(&*_decompressionContext) != Z_OK) {
+      return std::unexpected(
+          "Failed to reset inflate stream for websocket endpoint");
+    }
+    return {};
+  }
 
   void setPassThrough(bool passThroughState) {
     if (passThroughState)
@@ -872,7 +902,7 @@ protected:
   }
 
   auto decompressPayload(std::string_view payload,
-                                 http::SupportedCompression compression) {
+                         http::SupportedCompression compression) {
     _decompressedBody.clear();
     // Only RFC 7692 permessage-deflate frames are shipped without the
     // terminating empty block; gzip/deflate HTTP bodies are complete streams.
@@ -880,12 +910,10 @@ protected:
       return http::decompressPayloadToBuffer(payload, compression,
                                              _decompressedBody);
     }
-    return http::decompressPayloadToBuffer(amendCompressionBlockTailIfMissing(payload), compression,
-                                           _decompressedBody,
-                                           *_compressionContext);
+    return http::decompressPayloadToBuffer(
+        amendCompressionBlockTailIfMissing(payload), compression,
+        _decompressedBody, *_decompressionContext);
   }
-
-
 
   std::unique_ptr<std::ifstream> _activeFileStream{};
   std::string _uriPath;
@@ -910,8 +938,9 @@ protected:
   bool _serverSide{false};
   std::deque<HttpResponsePayloadOptions> _pendingResponseOptions{};
   std::optional<z_stream> _compressionContext{};
-  http::SupportedCompression _activeCompressionFormat{http::SupportedCompression::None};
+  std::optional<z_stream> _decompressionContext{};
+  http::SupportedCompression _activeCompressionFormat{
+      http::SupportedCompression::None};
   std::vector<char> _preDecompressionBuffer{};
-
 };
 } // namespace medici::sockets::live

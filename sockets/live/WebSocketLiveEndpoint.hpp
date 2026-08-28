@@ -166,8 +166,9 @@ public:
                                    CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = this->compressionActive() && (opCode == WSOpCode::Text |
-                                                    opCode == WSOpCode::Binary);
+    const bool compressed =
+        this->compressionActive() &&
+        (opCode == WSOpCode::Text | opCode == WSOpCode::Binary);
     if (compressed) {
       if (auto deflatedResult = http::compressPayload(
               payload, http::SupportedCompression::WSDeflate,
@@ -245,15 +246,21 @@ public:
                                    CallableT cb = CallableT{}) {
     _sendBuffer.clear();
     auto uncompressed = payload;
-    const bool compressed = this->compressionActive() && (opCode == WSOpCode::Text ||
-                                                    opCode == WSOpCode::Binary);
+    const bool compressed =
+        this->compressionActive() &&
+        (opCode == WSOpCode::Text || opCode == WSOpCode::Binary);
     if (compressed) {
-      if (auto deflatedResult = http::compressZStream(
-              this->getCompressionContext(), payload, this->getCompressedDataBuffer());
+      if (auto deflatedResult =
+              http::compressZStream(this->getCompressionContext(), payload,
+                                    this->getCompressedDataBuffer());
           !deflatedResult) {
         return std::unexpected(std::format(
             "Failed to deflate websocket payload, endpoint name={}, error={}",
             this->name(), deflatedResult.error()));
+      }
+      // no_context_takeover: each message must be independently decodable
+      if (auto resetResult = this->resetCompressionContext(); !resetResult) {
+        return resetResult;
       }
       payload = std::string_view(reinterpret_cast<const char *>(
                                      this->getCompressedDataBuffer().data()),
@@ -352,7 +359,8 @@ private:
       if (_deflateRequested) {
         upgradeHeaders.addFieldValue(
             "Sec-WebSocket-Extensions",
-            "permessage-deflate; client_max_window_bits");
+            "permessage-deflate; server_no_context_takeover; "
+            "client_no_context_takeover; client_max_window_bits");
       }
 
       return BaseSocketEndpointT::sendHttpRequest(
@@ -414,13 +422,23 @@ private:
             extField) {
           auto extValue = extField.value();
           if (extValue.find("permessage-deflate") != std::string::npos) {
-            // Client requested permessage-deflate extension
-            if (auto result = this->initializeCompressionContext(http::SupportedCompression::WSDeflate); !result) {
+            // Client requested permessage-deflate extension. Send (deflate)
+            // and receive (inflate) are independent zlib streams, so both
+            // must be initialized here.
+            if (auto result = this->initializeCompressionContext(
+                    http::SupportedCompression::WSDeflate);
+                !result) {
+              return result;
+            }
+            if (auto result = this->initializeDecompressionCompressionContext(
+                    http::SupportedCompression::WSDeflate);
+                !result) {
               return result;
             }
             responseHeaders.addFieldValue(
                 "Sec-WebSocket-Extensions",
-                "permessage-deflate; client_max_window_bits=15");
+                "permessage-deflate; server_no_context_takeover; "
+                "client_no_context_takeover; client_max_window_bits=15");
           }
         }
 
@@ -442,7 +460,7 @@ private:
       if (headers.getField("Upgrade") &&
           headers.getField("Upgrade").value() == "websocket") {
         _upgraded = true;
-        // Tell the base socket to stop parsing headers and body
+        // Tell the base http socket to stop parsing headers and body
         // and just deliver the raw payload
         BaseSocketEndpointT::setPassThrough(true);
       } else {
@@ -458,7 +476,8 @@ private:
         auto extValue = extField.value();
         if (extValue.find("permessage-deflate") != std::string::npos) {
           // Server accepted permessage-deflate extension
-          if (auto result = this->initializeDecompressionCompressionContext(http::SupportedCompression::WSDeflate);
+          if (auto result = this->initializeDecompressionCompressionContext(
+                  http::SupportedCompression::WSDeflate);
               !result) {
             return result;
           }
@@ -584,8 +603,15 @@ private:
         }
 
         _finalFrame = wsFramePayload[0] & WS_FIN;
-        const bool rsv1 =
-            (static_cast<std::uint8_t>(wsFramePayload[0]) & 0x40U) != 0;
+        const auto firstByte = static_cast<std::uint8_t>(wsFramePayload[0]);
+        const bool rsv1 = (firstByte & WS_RSV1) != 0;
+
+        // RFC 6455 5.2: RSV2/RSV3 MUST be 0 unless a negotiated extension
+        // defines their meaning; we negotiate none, so fail on non-zero.
+        if (firstByte & (WS_RSV2 | WS_RSV3)) {
+          return std::unexpected(
+              "WebSocket protocol violation: RSV2/RSV3 bits must be zero");
+        }
 
         messagePayload =
             std::string_view{wsFramePayload + headerSize + maskingKeyLength,
@@ -697,6 +723,11 @@ private:
                 currentBufferOffset, messagesRead, currentFramePayloadSize,
                 deflatedResult.error()));
           } else {
+            // no_context_takeover: each message must be independently decodable
+            if (auto resetResult = this->resetDecompressionContext();
+                !resetResult) {
+              return resetResult;
+            }
             messagePayload = std::string_view(
                 reinterpret_cast<const char *>(
                     BaseSocketEndpointT::getDecompressedBodyBuffer().data()),
