@@ -11,6 +11,7 @@
 #include <format>
 #include <map>
 #include <memory>
+#include <pthread.h>
 #include <thread>
 #include <vector>
 
@@ -146,6 +147,10 @@ public:
         auto context = entry.second.context;
         _threadsByName.emplace(
             threadName, std::jthread{[context, threadName]() {
+              // Truncated to 15 chars, the pthread name length limit; used
+              // by CrashHandler to identify the thread in a crash dump.
+              pthread_setname_np(pthread_self(),
+                                 threadName.substr(0, 15).c_str());
               if (auto result = context->start(); !result) {
                 std::cerr << std::format("Event Error on thread {}: {}",
                                          threadName, result.error())
