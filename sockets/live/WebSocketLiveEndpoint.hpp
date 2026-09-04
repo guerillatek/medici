@@ -579,8 +579,10 @@ private:
           // Server-to-client frames MUST NOT be masked
           if constexpr (std::is_same_v<ServerSideEndpointT,
                                        BaseSocketEndpointT>) {
-            return std::unexpected(
-                "WebSocket protocol violation: Client frame is not masked");
+            return this->sendFramedPayload(
+                WSOpCode::ClosedConnection,
+                "WebSocket protocol violation: RFC 6455, client-to-server "
+                "frames MUST be masked");
           }
         }
 
@@ -597,7 +599,8 @@ private:
         } else {
           // Current SSL read does contain the end of message so set the next
           // message offset
-          nextMessageOffset += (expectedFramePayloadLength + headerSize);
+          nextMessageOffset +=
+              (expectedFramePayloadLength + headerSize + maskingKeyLength);
           // and set current payload length to the message length
           currentFramePayloadSize = expectedFramePayloadLength;
         }
