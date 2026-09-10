@@ -637,12 +637,19 @@ protected:
                   const_cast<char *>(payload.data()) + payload.size()}};
 
     while (payloadStream.tellg() < totalSize) {
+      auto positionBeforeParse = payloadStream.tellg();
       _activePayload = payload;
-      _activePayload.remove_prefix(payloadStream.tellg());
+      _activePayload.remove_prefix(positionBeforeParse);
       if (auto result =
               handleBaseSocketInboundPayload(payloadStream, epollTime);
           !result) {
         return result;
+      }
+      if (payloadStream.tellg() == positionBeforeParse) {
+        // Handler buffered the remainder via prependPartialContent and
+        // consumed nothing (e.g. an incomplete request/status line):
+        // stop here instead of spinning forever on the same bytes.
+        break;
       }
     }
     return {}; // All data processed successfully
