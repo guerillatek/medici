@@ -89,7 +89,7 @@ public:
   bool isActive() const { return this->getConnectionManager().isConnected(); }
 
   Expected send(std::string_view payload) override {
-    if (_asyncSendInProgress || !_pendingAsyncSends.empty()) {
+    if (_asyncSendInProgress || this->timeBufferPending()) {
       return std::unexpected(
           std::format("Endpoint name={} already has an async send in progress",
                       this->getConfig().name()));
@@ -106,6 +106,7 @@ public:
           "connection",
           this->getConfig().name()));
     }
+    this->_lastSendTime = this->getConnectionManager().getClock()();
     return {};
   }
 
@@ -121,7 +122,7 @@ public:
       return std::unexpected{result.error()};
     }
 
-    if (_asyncSendInProgress) {
+    if (_asyncSendInProgress || this->timeBufferPending()) {
       _queuedBackpressureBytes += buffer.size();
       _pendingAsyncSends.emplace_back(
           PendingAsyncSend{std::string{buffer}, std::move(finishCB)});
@@ -155,32 +156,35 @@ public:
     if (_asyncBytesSent == this->getOutboundBuffer().size()) {
       this->clearOutboundBuffer();
       _asyncBytesSent = 0;
+      this->_lastSendTime = this->getClock()();
       return true;
     }
     return false;
   }
 
   AsyncExpected processAsyncSendQueue() {
-    if (!_asyncSendInProgress) {
-      return true;
+    if (_asyncSendInProgress) {
+      auto sendResult = sendAsyncCont();
+      if (!sendResult) {
+        return std::unexpected(sendResult.error());
+      }
+      if (!sendResult.value()) {
+        return false;
+      }
+
+      if (_activeFinishCB) {
+        auto result = _activeFinishCB();
+        if (!result) {
+          return std::unexpected(result.error());
+        }
+        _activeFinishCB = {};
+      }
+      _asyncSendInProgress = false;
     }
 
-    auto sendResult = sendAsyncCont();
-    if (!sendResult) {
-      return std::unexpected(sendResult.error());
-    }
-    if (!sendResult.value()) {
+    if (this->timeBufferPending()) {
       return false;
     }
-
-    if (_activeFinishCB) {
-      auto result = _activeFinishCB();
-      if (!result) {
-        return std::unexpected(result.error());
-      }
-      _activeFinishCB = {};
-    }
-    _asyncSendInProgress = false;
 
     if (_pendingAsyncSends.empty()) {
       return true;
@@ -194,6 +198,7 @@ public:
     std::copy(nextSend.payload.begin(), nextSend.payload.end(),
               std::back_inserter(this->getOutboundBuffer()));
     _activeFinishCB = std::move(nextSend.finishCB);
+    _activeTimeBuffer = nextSend.timeBuffer;
     _asyncBytesSent = 0;
     _asyncSendInProgress = true;
     return false;
@@ -291,6 +296,7 @@ protected:
   size_t _queuedBackpressureBytes{0};
   bool _asyncSendInProgress{false};
   CallableT _activeFinishCB{};
+  std::optional<std::chrono::nanoseconds> _activeTimeBuffer{};
   std::deque<PendingAsyncSend> _pendingAsyncSends{};
 };
 } // namespace medici::sockets::live

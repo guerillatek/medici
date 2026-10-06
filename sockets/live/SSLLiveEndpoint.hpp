@@ -1,7 +1,7 @@
 #pragma once
 
 #include "medici/sockets/live/EndpointBase.hpp"
-
+#include "medici/time.hpp"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -219,7 +219,7 @@ public:
                       payload, this->getConfig().name(),
                       this->getConfig().host(), this->getConfig().port()));
     }
-    if (_asyncSendInProgress) {
+    if (_asyncSendInProgress || this->timeBufferPending()) {
       return sendAsync(payload, []() { return Expected{}; });
     }
 
@@ -252,6 +252,7 @@ public:
           this->getConfig().name(), this->getConfig().host(),
           this->getConfig().port(), msg));
     }
+    this->_lastSendTime = this->getConnectionManager().getClock()();
     return {};
   }
 
@@ -267,7 +268,7 @@ public:
       return std::unexpected{result.error()};
     }
 
-    if (_asyncSendInProgress) {
+    if (_asyncSendInProgress || this->timeBufferPending()) {
       _queuedBackpressureBytes += buffer.size();
       _pendingAsyncSends.emplace_back(
           PendingAsyncSend{std::string{buffer}, std::move(finishCB)});
@@ -292,7 +293,6 @@ public:
                       this->getConfig().name()));
     }
 
-    
     int bytesWritten = SSL_write(
         _sslSocket.get(), this->getOutboundBuffer().data() + _asyncBytesSent,
         this->getOutboundBuffer().size() - _asyncBytesSent);
@@ -312,6 +312,7 @@ public:
       if (!result) {
         return std::unexpected(result.error());
       }
+      this->_lastSendTime = this->getClock()();
       return true;
     }
 
@@ -325,26 +326,29 @@ public:
   }
 
   AsyncExpected processAsyncSendQueue() {
-    if (!_asyncSendInProgress) {
-      return true;
+
+    if (_asyncSendInProgress) {
+      auto sendResult = sendAsyncCont();
+      if (!sendResult) {
+        return std::unexpected(sendResult.error());
+      }
+      if (!sendResult.value()) {
+        return false;
+      }
+
+      if (_activeFinishCB) {
+        auto result = _activeFinishCB();
+        if (!result) {
+          return std::unexpected(result.error());
+        }
+        _activeFinishCB = {};
+      }
+      _asyncSendInProgress = false;
     }
 
-    auto sendResult = sendAsyncCont();
-    if (!sendResult) {
-      return std::unexpected(sendResult.error());
-    }
-    if (!sendResult.value()) {
+    if (this->timeBufferPending()) {
       return false;
     }
-
-    if (_activeFinishCB) {
-      auto result = _activeFinishCB();
-      if (!result) {
-        return std::unexpected(result.error());
-      }
-      _activeFinishCB = {};
-    }
-    _asyncSendInProgress = false;
 
     if (_pendingAsyncSends.empty()) {
       return true;

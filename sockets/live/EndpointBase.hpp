@@ -27,7 +27,11 @@ public:
                                         DisconnectedHandlerT,
                                         onActiveHandler},
         _connectionManager{config, endpointPollManager, *this, connectionType} {
-
+    if (config.maxMessagesPerSecond() &&
+        config.maxMessagesPerSecond().value() > 0) {
+      _activeTimeBuffer = std::chrono::nanoseconds(
+          1000000000 / config.maxMessagesPerSecond().value());
+    }
   }
 
   EndpointBase(int fd, ConnectionType connectionType,
@@ -60,6 +64,8 @@ public:
   auto &getConfig() const { return _config; }
 
 protected:
+  virtual const ClockNowT &getClock() const = 0;
+
   void resizeInboundBuffer(size_t newSize) { _inboundBuffer.resize(newSize); }
   auto &getConnectionManager() { return _connectionManager; }
 
@@ -104,12 +110,26 @@ protected:
     return size;
   }
 
+  bool timeBufferPending() {
+    if (_activeTimeBuffer.has_value()) {
+      if (this->getClock()() - _lastSendTime >=
+          _activeTimeBuffer.value()) {
+        _activeTimeBuffer = std::nullopt;
+        return false;
+      }
+      return true;
+    }
+    return false;
+  };
+
   IPEndpointConfig _config;
   std::vector<char> _inboundBuffer{};
   std::vector<char> _outboundBuffer{};
   size_t _inboundWriteOffset{0};
   SocketEventHandlers _eventHandlers;
   IPEndpointConnectionManager _connectionManager;
+  TimePoint _lastSendTime{};
+  std::optional<std::chrono::nanoseconds> _activeTimeBuffer{};
 };
 
 } // namespace medici::sockets::live

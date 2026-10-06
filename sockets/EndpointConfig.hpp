@@ -21,6 +21,9 @@ concept IPEndpointConfigC = requires(T t) {
   { t.interface() } -> std::convertible_to<std::string>;
   { t.recvBufferKB() } -> std::convertible_to<std::uint32_t>;
   { t.ioLogging() } -> std::convertible_to<IOloggingConfig>;
+  {
+    t.maxMessagesPerSecond()
+  } -> std::convertible_to<std::optional<std::uint32_t>>;
 };
 
 template <typename T>
@@ -40,20 +43,25 @@ struct IPEndpointConfig {
   std::string _interface{};
   std::uint32_t _recvBufferKB{1};
   IOloggingConfig _ioLogging{};
+  std::optional<std::uint32_t> _maxMessagesPerSecond{0};
 
 public:
   IPEndpointConfig() {}
-  IPEndpointConfig(const std::string &name, const std::string &host,
-                   std::uint16_t port, std::uint32_t recvBufferKB = 16,
-                   std::string interface = "", IOloggingConfig ioLogging = {})
+  IPEndpointConfig(
+      const std::string &name, const std::string &host, std::uint16_t port,
+      std::uint32_t recvBufferKB = 16, std::string interface = "",
+      IOloggingConfig ioLogging = {},
+      std::optional<std::uint32_t> messagesPerSecond = std::nullopt)
       : _name{name}, _host{host}, _port{port}, _interface{interface},
-        _recvBufferKB{recvBufferKB}, _ioLogging{ioLogging}
+        _recvBufferKB{recvBufferKB}, _ioLogging{ioLogging},
+        _maxMessagesPerSecond{0}
 
   {}
 
   IPEndpointConfig(const IPEndpointConfigC auto &config)
       : _name{config.name()}, _host{config.host()}, _port{config.port()},
-        _interface{config.interface()}, _ioLogging{config.ioLogging()} {}
+        _interface{config.interface()}, _ioLogging{config.ioLogging()},
+        _maxMessagesPerSecond{config.maxMessagesPerSecond()} {}
 
   auto &name() const { return _name; }
 
@@ -66,6 +74,8 @@ public:
   auto recvBufferKB() const { return _recvBufferKB; }
 
   auto &ioLogging() const { return _ioLogging; }
+
+  auto maxMessagesPerSecond() const { return _maxMessagesPerSecond; }
 };
 
 struct HttpEndpointConfig : public IPEndpointConfig {
